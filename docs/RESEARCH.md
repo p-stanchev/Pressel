@@ -66,12 +66,15 @@ Pressel should be understood as a modular research codec. The project is not cla
 
 ## Current Scope
 
-The current `v0.2.0` research prototype focuses on:
+The current `v0.3.0` research prototype focuses on:
 
 - `.prsl` v1 container design
 - strict RGBA verification
 - a reversible tile pipeline
+- expanded reversible transform search
+- adaptive per-block predictor selection
 - benchmark generation through `bench.csv`
+- safer decode validation and CI-backed testing
 
 ## Non-Goals
 

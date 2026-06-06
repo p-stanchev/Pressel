@@ -172,10 +172,10 @@ Reported metrics include:
 
 Example local results:
 
-| Image | PNG size | First-generation PRSL | Current PRSL | Exact RGBA match |
-|---|---:|---:|---:|---|
-| synthetic demo (`--seed 42`) | 58,770 bytes | 7,633 bytes | 6,745 bytes | true |
-| rural photo | 3,891,380 bytes | 2,908,487 bytes | 2,908,487 bytes | true |
+| Image | PNG size | First-generation PRSL | Second-generation PRSL | Third-generation PRSL | Exact RGBA match |
+|---|---:|---:|---:|---:|---|
+| synthetic demo (`--seed 42`) | 58,770 bytes | 7,633 bytes | 6,745 bytes | 6,745 bytes | true |
+| rural photo | 3,891,380 bytes | 2,908,487 bytes | 2,908,487 bytes | 2,907,378 bytes | true |
 
 For the rural photo example, `verify` reported matching decoded RGBA hashes:
 
@@ -196,17 +196,13 @@ Pressel is designed as a research codec, not just a file converter.
 
 ## Version Goal
 
-This project is currently positioned as `v0.2.0`: a more capable research prototype with `encode`, `decode`, `verify`, `compare`, `bench`, and demo-image commands, documentation, strict roundtrip tests, CI, safer decode validation, and an expanded reversible transform set.
+This project is currently positioned as `v0.3.0`: a more capable research prototype with `encode`, `decode`, `verify`, `compare`, `bench`, and demo-image commands, documentation, strict roundtrip tests, CI, safer decode validation, an expanded reversible transform set, and adaptive predictor maps.
 
 ## Roadmap
 
 - Golomb-Rice residual coding
 - rANS entropy coding
-- adaptive block predictor maps
 - QOI-style pixel cache mode
-- palette/index transform for `.prsl`
-- alpha-plane separation
-- reversible YCoCg-R transform
 - JPEG XL-style weighted predictor
 - per-tile image classifier
 - multithreaded tile encoding

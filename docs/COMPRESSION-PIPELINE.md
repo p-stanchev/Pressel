@@ -65,6 +65,7 @@ Pressel v1 currently tries these predictors for every tile:
 - Average
 - Paeth
 - JPEG-LS MED-style predictor
+- Adaptive 8x8 block predictor map
 
 Predictors are applied per byte channel within the transformed tile. The residual is stored as:
 
@@ -73,6 +74,8 @@ Predictors are applied per byte channel within the transformed tile. The residua
 and reconstructed as:
 
 `actual = predicted + residual mod 256`
+
+In the adaptive predictor mode, each 8x8 block inside a tile picks the best base predictor from the implemented set, and the block map is stored alongside the residual stream.
 
 ## Entropy Backends
 
@@ -99,6 +102,5 @@ Planned research directions include:
 
 - Golomb-Rice residual coding
 - rANS entropy coding
-- adaptive block predictor maps
 - QOI-style pixel cache
 - JPEG XL-style weighted predictor

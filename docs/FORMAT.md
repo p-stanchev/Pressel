@@ -81,8 +81,11 @@ Implemented in v1:
 - `3`: Average
 - `4`: Paeth
 - `5`: JPEG-LS MED-style predictor
+- `6`: Adaptive 8x8 block predictor map
 
 Predictors operate on transformed per-channel bytes. Residuals are encoded modulo 256.
+
+The adaptive predictor mode stores a compact per-block predictor map at the start of the residual stream, then encodes the tile using the selected predictor for each 8x8 block. This keeps the outer tile container unchanged while allowing more local predictor selection within a tile.
 
 ## Entropy Backend IDs
 

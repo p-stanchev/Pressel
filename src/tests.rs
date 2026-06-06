@@ -2,7 +2,7 @@ use crate::decode::decode_prsl_bytes;
 use crate::encode::encode_rgba_to_prsl_bytes;
 use crate::entropy::{decode_payload, encode_payload};
 use crate::format::{CHANNELS_RGBA8, DEFAULT_TILE_SIZE, MAGIC_BYTES};
-use crate::predict::{PREDICTOR_COUNT, decode_residuals, encode_residuals};
+use crate::predict::{PREDICTOR_COUNT, decode_residuals, encode_residuals, expected_residual_len};
 use crate::transform::{
     TRANSFORM_COUNT, apply_transform, reverse_transform, transform_ids_for_tile,
 };
@@ -119,6 +119,8 @@ fn every_predictor_roundtrip() {
     let rgba = gradient(11, 5);
     for predictor_id in 0..PREDICTOR_COUNT {
         let residuals = encode_residuals(&rgba, 11, 5, predictor_id).unwrap();
+        let expected_len = expected_residual_len(11, 5, predictor_id).unwrap();
+        assert_eq!(residuals.len(), expected_len);
         let decoded = decode_residuals(&residuals, 11, 5, predictor_id).unwrap();
         assert_eq!(decoded, rgba);
     }

@@ -2,7 +2,7 @@ use crate::entropy::decode_payload;
 use crate::format::{
     CHANNELS_RGBA8, DEFAULT_TILE_SIZE, MAX_RGBA_BYTES, PresselFile, TileHeader, rgba_sha256,
 };
-use crate::predict::decode_residuals;
+use crate::predict::{decode_residuals, expected_residual_len};
 use crate::tiles::{TileBounds, write_tile_rgba};
 use crate::transform::reverse_transform;
 use anyhow::{Context, Result, bail};
@@ -78,7 +78,7 @@ pub fn decode_prsl_bytes(bytes: &[u8]) -> Result<DecodedImage> {
 }
 
 fn decode_tile(header: &TileHeader, payload: &[u8]) -> Result<Vec<u8>> {
-    let expected_len = tile_rgba_len(header.width, header.height)?;
+    let expected_len = expected_residual_len(header.width, header.height, header.predictor_id)?;
     let residuals = decode_payload(header.entropy_backend_id, payload, expected_len)?;
     let transformed =
         decode_residuals(&residuals, header.width, header.height, header.predictor_id)?;
@@ -118,14 +118,4 @@ fn rgba_byte_len(width: u32, height: u32) -> Result<usize> {
         .checked_mul(CHANNELS_RGBA8 as u64)
         .context("decoded image RGBA byte count overflow")?;
     usize::try_from(rgba_bytes).context("decoded image RGBA byte count exceeds platform usize")
-}
-
-fn tile_rgba_len(width: u16, height: u16) -> Result<usize> {
-    let pixels = (width as u64)
-        .checked_mul(height as u64)
-        .context("tile pixel count overflow")?;
-    let rgba_bytes = pixels
-        .checked_mul(CHANNELS_RGBA8 as u64)
-        .context("tile RGBA byte count overflow")?;
-    usize::try_from(rgba_bytes).context("tile RGBA byte count exceeds platform usize")
 }
