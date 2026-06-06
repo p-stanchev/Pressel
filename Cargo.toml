@@ -1,0 +1,19 @@
+[package]
+name = "pressel"
+version = "0.1.0"
+edition = "2024"
+authors = ["Petar Stanchev"]
+license = "MIT"
+description = "Experimental strictly lossless image codec in Rust."
+readme = "README.md"
+keywords = ["lossless-compression", "image-codec", "research-codec", "predictive-coding"]
+categories = ["multimedia::images", "compression", "command-line-utilities"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+csv = "1"
+image = "0.25"
+sha2 = "0.10"
+walkdir = "2"
+zstd = "0.13"
