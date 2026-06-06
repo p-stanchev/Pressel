@@ -1,2 +1,9 @@
+# Build outputs
 /target
+
+# Benchmark artifacts
 bench.csv
+
+# Generated demo and codec artifacts
+*.png
+*.prsl

@@ -49,6 +49,10 @@ Implemented in v1:
 
 - `0`: Raw RGBA
 - `1`: Subtract-green
+- `2`: Reversible YCoCg-R
+- `3`: Alpha-plane separation
+- `4`: Green average decorrelation
+- `5`: Palette/index packed transform for suitable tiles
 
 Subtract-green uses:
 
@@ -58,6 +62,14 @@ Subtract-green uses:
 - `A' = A`
 
 The inverse adds green back modulo 256.
+
+Reversible YCoCg-R stores luma/chroma-like channel combinations using wrapping 8-bit arithmetic and reconstructs the original `R`, `G`, and `B` channels exactly.
+
+Alpha-plane separation stores the alpha channel as a separate leading plane followed by grouped color planes. This can improve compression on images whose alpha structure differs from their color structure.
+
+Green average decorrelation keeps `R` and `B` unchanged while storing `G' = G - floor((R + B) / 2) mod 256`.
+
+The palette/index packed transform is only used on tiles where the exact colors fit into a compact palette representation inside the fixed-width transformed tile buffer.
 
 ## Predictor IDs
 

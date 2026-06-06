@@ -3,7 +3,9 @@ use crate::encode::encode_rgba_to_prsl_bytes;
 use crate::entropy::{decode_payload, encode_payload};
 use crate::format::{CHANNELS_RGBA8, DEFAULT_TILE_SIZE, MAGIC_BYTES};
 use crate::predict::{PREDICTOR_COUNT, decode_residuals, encode_residuals};
-use crate::transform::{TRANSFORM_COUNT, apply_transform, reverse_transform};
+use crate::transform::{
+    TRANSFORM_COUNT, apply_transform, reverse_transform, transform_ids_for_tile,
+};
 use crate::verify::run_verify;
 use image::{ImageBuffer, Rgba, RgbaImage};
 use std::fs;
@@ -97,8 +99,15 @@ fn non_divisible_tile_dimensions() {
 
 #[test]
 fn every_transform_roundtrip() {
-    let rgba = gradient(9, 7);
     for transform_id in 0..TRANSFORM_COUNT {
+        let rgba = if transform_id == 5 {
+            checkerboard(9, 7)
+        } else {
+            gradient(9, 7)
+        };
+        if !transform_ids_for_tile(&rgba).contains(&transform_id) {
+            continue;
+        }
         let transformed = apply_transform(transform_id, &rgba).unwrap();
         let reversed = reverse_transform(transform_id, &transformed).unwrap();
         assert_eq!(reversed, rgba);

@@ -66,7 +66,7 @@ Pressel should be understood as a modular research codec. The project is not cla
 
 ## Current Scope
 
-The current `v0.1.0` working research prototype focuses on:
+The current `v0.2.0` research prototype focuses on:
 
 - `.prsl` v1 container design
 - strict RGBA verification

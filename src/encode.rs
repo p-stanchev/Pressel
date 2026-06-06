@@ -5,7 +5,7 @@ use crate::format::{
 };
 use crate::predict::{PREDICTOR_COUNT, encode_residuals};
 use crate::tiles::{TileBounds, extract_tile_rgba, split_into_tiles};
-use crate::transform::{TRANSFORM_COUNT, apply_transform};
+use crate::transform::{TRANSFORM_COUNT, apply_transform, transform_ids_for_tile};
 use anyhow::{Context, Result};
 use image::ImageReader;
 use std::fs;
@@ -77,7 +77,7 @@ fn encode_tile(tile: TileBounds, tile_rgba: &[u8]) -> Result<EncodedTile> {
     let mut best: Option<EncodedTile> = None;
     let mut best_total_len = usize::MAX;
 
-    for transform_id in 0..TRANSFORM_COUNT {
+    for transform_id in transform_ids_for_tile(tile_rgba) {
         let transformed = apply_transform(transform_id, tile_rgba)?;
         for predictor_id in 0..PREDICTOR_COUNT {
             let residuals = encode_residuals(&transformed, tile.width, tile.height, predictor_id)?;

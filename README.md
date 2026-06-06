@@ -172,10 +172,18 @@ Reported metrics include:
 
 Example local results:
 
-| Image | PNG size | PRSL size | Exact RGBA match |
-|---|---:|---:|---|
-| synthetic demo (`--seed 42`) | 58,770 bytes | 6,745 bytes | true |
-| rural photo | 3,891,380 bytes | 2,908,487 bytes | true |
+| Image | PNG size | First-generation PRSL | Current PRSL | Exact RGBA match |
+|---|---:|---:|---:|---|
+| synthetic demo (`--seed 42`) | 58,770 bytes | 7,633 bytes | 6,745 bytes | true |
+| rural photo | 3,891,380 bytes | 2,908,487 bytes | 2,908,487 bytes | true |
+
+For the rural photo example, `verify` reported matching decoded RGBA hashes:
+
+```text
+original SHA-256: 2d4ad8c726cb2a9ef105e683544b07234c669dc71d976ec4a7767c925bfce05a
+decoded SHA-256: 2d4ad8c726cb2a9ef105e683544b07234c669dc71d976ec4a7767c925bfce05a
+exact match: true
+```
 
 ## Research Notes
 
@@ -188,7 +196,7 @@ Pressel is designed as a research codec, not just a file converter.
 
 ## Version Goal
 
-This project is currently positioned as `v0.1.0`: a working research prototype with `encode`, `decode`, `verify`, `compare`, `bench`, and demo-image commands, documentation, and strict roundtrip tests.
+This project is currently positioned as `v0.2.0`: a more capable research prototype with `encode`, `decode`, `verify`, `compare`, `bench`, and demo-image commands, documentation, strict roundtrip tests, CI, safer decode validation, and an expanded reversible transform set.
 
 ## Roadmap
 
