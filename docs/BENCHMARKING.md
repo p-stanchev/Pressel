@@ -53,10 +53,23 @@ Those preservation modes should be reported explicitly rather than mixed into th
 Future benchmark studies may compare Pressel against:
 
 - PNG
+- ZopfliPNG
 - WebP lossless
 - JPEG-LS
 - JPEG XL lossless
 - QOI
+
+A useful comparison table should keep at least these columns aligned:
+
+- input file name
+- original PNG size
+- ZopfliPNG output size
+- WebP lossless output size
+- JPEG XL lossless output size
+- Pressel `.prsl` size
+- exactness notes
+
+Pressel should not be framed as “better PNG” unless those measurements are actually present and reproducible.
 
 Such comparisons should be explicit about:
 

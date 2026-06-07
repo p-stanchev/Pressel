@@ -53,6 +53,16 @@ Pressel preserves the decoded image signal, not the original PNG file bitstream.
 
 Pressel is experimental research software, not a production image standard. The codec and documentation are intended to support exploration, benchmarking, and demo workflows. Claims about compression effectiveness should be validated with benchmarks rather than assumed.
 
+## Known Limitations
+
+- Encoder speed is still under active optimization and can be slow on larger natural images.
+- The current benchmark corpus is still small and should not be treated as broad proof of superiority.
+- The format is experimental and may still change before `1.0`.
+- The current implementation targets RGBA8 decoded-pixel fidelity rather than broad format compatibility.
+- Optional source-file preservation is an archival feature, not a compression feature, and will usually increase `.prsl` size substantially.
+- Tooling around the format is still immature; there is no broader editor, browser, or ecosystem integration yet.
+- Zstd is still part of the current entropy path, so the codec is not yet a pure custom entropy-coder stack.
+
 ## Demo
 
 Build the release binary:
@@ -143,7 +153,7 @@ By default, Pressel stores only what it needs for exact decoded RGBA recovery.
 - Default mode: exact RGBA only
 - `--preserve-png-metadata`: store a curated set of useful PNG metadata chunks such as `gAMA`, `cHRM`, `sRGB`, `iCCP`, `pHYs`, `tIME`, `tEXt`, `zTXt`, `iTXt`, and `eXIf`
 - `--preserve-png-chunks`: store all ancillary PNG chunks with placement/order data
-- `--preserve-source-file`: store the original PNG file byte-for-byte for exact extraction later
+- `--preserve-source-file`: store the original PNG file byte-for-byte for exact extraction later as a source-preservation mode
 
 `--preserve-png-chunks` subsumes `--preserve-png-metadata`. If both are provided, Pressel stores ancillary chunks once in chunk mode and does not duplicate metadata in a second tag.
 
@@ -226,6 +236,15 @@ Generation 6 is intended to show the size impact of optional PNG preservation mo
 - `Gen 6 + source file`: exact RGBA plus the original PNG stored byte-for-byte
 
 The generated synthetic sample does not contain meaningful preserved PNG metadata or ancillary chunks, so its `Gen 6 default`, `Gen 6 + metadata`, and `Gen 6 + chunks` sizes are identical. The rural photo is a better example of preservation overhead on a real PNG input.
+
+Cross-codec comparison should be tracked separately from the generation tables above. A useful public-facing comparison table would include:
+
+| File | Original PNG | ZopfliPNG | WebP Lossless | JPEG XL Lossless | Pressel |
+|---|---:|---:|---:|---:|---:|
+| Rural | pending | pending | pending | pending | 2,224,193 bytes |
+| Synthetic | pending | pending | pending | pending | 1,895 bytes |
+
+That table is intentionally left incomplete until the comparison numbers are measured under explicit settings.
 
 To measure those four generation 6 variants on the same PNG:
 
