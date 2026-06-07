@@ -31,6 +31,8 @@ enum Command {
     Encode {
         input_image: PathBuf,
         output_prsl: PathBuf,
+        #[arg(long, default_value_t = 1)]
+        cores: usize,
     },
     Decode {
         input_prsl: PathBuf,
@@ -46,6 +48,8 @@ enum Command {
     },
     Bench {
         folder: PathBuf,
+        #[arg(long, default_value_t = 1)]
+        cores: usize,
     },
     MakeDemoImage {
         output_png: PathBuf,
@@ -60,7 +64,8 @@ fn main() -> Result<()> {
         Command::Encode {
             input_image,
             output_prsl,
-        } => encode::run_encode(&input_image, &output_prsl),
+            cores,
+        } => encode::run_encode(&input_image, &output_prsl, cores),
         Command::Decode {
             input_prsl,
             output_png,
@@ -73,7 +78,7 @@ fn main() -> Result<()> {
             first_image,
             second_image,
         } => compare::run_compare(&first_image, &second_image).map(|_| ()),
-        Command::Bench { folder } => bench::run_bench(&folder),
+        Command::Bench { folder, cores } => bench::run_bench(&folder, cores),
         Command::MakeDemoImage { output_png, seed } => demo::run_make_demo_image(&output_png, seed),
     }
 }

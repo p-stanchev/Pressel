@@ -101,8 +101,8 @@ impl PresselHeader {
         if tile_size == 0 {
             bail!("invalid tile size 0");
         }
-        let rgba_bytes = rgba_byte_len(width, height)?;
-        if rgba_bytes > MAX_RGBA_BYTES {
+        let rgba_bytes = rgba_byte_len_u64(width, height)?;
+        if rgba_bytes > MAX_RGBA_BYTES as u64 {
             bail!("image RGBA buffer exceeds limit: {rgba_bytes} bytes > {MAX_RGBA_BYTES} bytes");
         }
 
@@ -165,7 +165,9 @@ impl PresselFile {
 
     pub fn read_from<R: Read>(reader: &mut R) -> Result<Self> {
         let header = PresselHeader::read_from(reader)?;
-        let mut tiles = Vec::with_capacity(header.tile_count as usize);
+        let tile_count =
+            usize::try_from(header.tile_count).context("tile count exceeds platform usize")?;
+        let mut tiles = Vec::with_capacity(tile_count);
         for _ in 0..header.tile_count {
             let tile_header = TileHeader::read_from(reader)?;
             if tile_header.width == 0 || tile_header.height == 0 {
@@ -175,7 +177,9 @@ impl PresselFile {
                     tile_header.y
                 );
             }
-            let mut payload = vec![0_u8; tile_header.compressed_payload_len as usize];
+            let payload_len = usize::try_from(tile_header.compressed_payload_len)
+                .context("tile payload length exceeds platform usize")?;
+            let mut payload = vec![0_u8; payload_len];
             reader.read_exact(&mut payload).with_context(|| {
                 format!(
                     "failed reading tile payload at ({}, {})",
@@ -209,12 +213,11 @@ fn read_u32<R: Read>(reader: &mut R) -> Result<u32> {
     Ok(u32::from_le_bytes(buf))
 }
 
-fn rgba_byte_len(width: u32, height: u32) -> Result<usize> {
-    let pixels = (width as u64)
-        .checked_mul(height as u64)
+pub fn rgba_byte_len_u64(width: u32, height: u32) -> Result<u64> {
+    let pixels = u64::from(width)
+        .checked_mul(u64::from(height))
         .context("image pixel count overflow")?;
-    let rgba_bytes = pixels
-        .checked_mul(CHANNELS_RGBA8 as u64)
-        .context("image RGBA byte count overflow")?;
-    usize::try_from(rgba_bytes).context("image RGBA byte count exceeds platform usize")
+    pixels
+        .checked_mul(u64::from(CHANNELS_RGBA8))
+        .context("image RGBA byte count overflow")
 }

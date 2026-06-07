@@ -4,7 +4,8 @@ use crate::entropy::{decode_payload, encode_payload};
 use crate::format::{CHANNELS_RGBA8, DEFAULT_TILE_SIZE, MAGIC_BYTES};
 use crate::predict::{PREDICTOR_COUNT, decode_residuals, encode_residuals, expected_residual_len};
 use crate::transform::{
-    TRANSFORM_COUNT, apply_transform, reverse_transform, transform_ids_for_tile,
+    TRANSFORM_COUNT, apply_transform, decode_special_transform, encode_special_transform,
+    is_special_transform, reverse_transform, transform_ids_for_tile,
 };
 use crate::verify::run_verify;
 use image::{ImageBuffer, Rgba, RgbaImage};
@@ -108,8 +109,13 @@ fn every_transform_roundtrip() {
         if !transform_ids_for_tile(&rgba).contains(&transform_id) {
             continue;
         }
-        let transformed = apply_transform(transform_id, &rgba).unwrap();
-        let reversed = reverse_transform(transform_id, &transformed).unwrap();
+        let reversed = if is_special_transform(transform_id) {
+            let payload = encode_special_transform(transform_id, &rgba, 9, 7).unwrap();
+            decode_special_transform(transform_id, &payload, 9, 7).unwrap()
+        } else {
+            let transformed = apply_transform(transform_id, &rgba).unwrap();
+            reverse_transform(transform_id, &transformed).unwrap()
+        };
         assert_eq!(reversed, rgba);
     }
 }

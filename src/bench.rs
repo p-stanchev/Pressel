@@ -1,5 +1,5 @@
 use crate::decode::decode_prsl_bytes;
-use crate::encode::{EncodeStats, encode_rgba_to_prsl_bytes};
+use crate::encode::{EncodeOptions, EncodeStats, encode_rgba_to_prsl_bytes_with_options};
 use anyhow::{Context, Result};
 use csv::Writer;
 use image::ImageReader;
@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::Instant;
 use walkdir::WalkDir;
 
-pub fn run_bench(folder: &Path) -> Result<()> {
+pub fn run_bench(folder: &Path, cores: usize) -> Result<()> {
     let mut writer = Writer::from_path("bench.csv").context("creating bench.csv")?;
     writer.write_record([
         "filename",
@@ -24,6 +24,10 @@ pub fn run_bench(folder: &Path) -> Result<()> {
         "selected_entropy_backend_counts",
         "verification_result",
     ])?;
+
+    let options = EncodeOptions {
+        cores: cores.max(1),
+    };
 
     for entry in WalkDir::new(folder)
         .into_iter()
@@ -43,9 +47,13 @@ pub fn run_bench(folder: &Path) -> Result<()> {
         let original_file_size = fs::metadata(path)?.len();
 
         let encode_start = Instant::now();
-        let (prsl_bytes, stats) =
-            encode_rgba_to_prsl_bytes(rgba.width(), rgba.height(), rgba.as_raw())
-                .with_context(|| format!("encoding {}", path.display()))?;
+        let (prsl_bytes, stats) = encode_rgba_to_prsl_bytes_with_options(
+            rgba.width(),
+            rgba.height(),
+            rgba.as_raw(),
+            options,
+        )
+        .with_context(|| format!("encoding {}", path.display()))?;
         let encode_time_ms = encode_start.elapsed().as_secs_f64() * 1000.0;
 
         let decode_start = Instant::now();

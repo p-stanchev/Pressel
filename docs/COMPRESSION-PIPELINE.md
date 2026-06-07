@@ -6,7 +6,8 @@ Pressel encodes images through a reversible, exact pipeline:
 
 input image
 → normalize to RGBA8
-→ split into 64x64 tiles
+→ search tile sizes
+→ split into tiles
 → try reversible transforms
 → apply predictors
 → encode residuals
@@ -20,7 +21,7 @@ The encoder decodes the source image and converts it to RGBA8. This normalized r
 
 ## Tiling
 
-Images are split into 64x64 tiles. Edge tiles may be smaller. Each tile is encoded independently so different regions of an image can choose different reversible strategies.
+The encoder currently searches a small set of whole-image tile sizes starting at `64` and chooses the file that compresses best exactly. For the chosen tile size, each tile is encoded independently so different regions of an image can choose different reversible strategies. Tile encoding can be parallelized through the CLI `--cores` flag without changing the exact decoded result.
 
 ## Reversible Transforms
 
@@ -55,6 +56,20 @@ Transform `4` stores `G' = G - floor((R + B) / 2) mod 256` while preserving `R`,
 
 Transform `5` is available only for suitable tiles. It builds an exact local palette and stores palette entries plus per-pixel indices inside the fixed-width transformed tile buffer. If a tile has too many unique colors or the packed representation would not fit, the transform is skipped for that tile.
 
+### Structured Exact Plane Transform
+
+Transform `6` splits the tile into separate `R`, `G`, `B`, and `A` planes and lets each plane choose a compact exact submode. Current submodes include:
+
+- raw plane storage
+- constant plane storage
+- global affine sparse plane modeling
+- row-affine sparse plane modeling
+- palette RLE plane modeling
+- palette bit-packed plane modeling
+- block-pulse plane modeling
+
+This transform is aimed at low-cardinality, patterned, or nearly affine channels that do not compress well when forced through one bytewise tile model.
+
 ## Predictors
 
 Pressel v1 currently tries these predictors for every tile:
@@ -84,7 +99,7 @@ Implemented backends:
 - Raw residual stream
 - Zstd residual stream
 
-Every tile tries both backends. The encoder keeps whichever exact representation is smaller once tile metadata is included.
+For bytewise transformed residual streams, every tile tries all implemented entropy backends. For the structured exact plane transform, the encoder stores its exact transform payload through the same raw-vs-Zstd choice and keeps the smaller exact representation once tile metadata is included.
 
 ## Tile Strategy Search
 
@@ -100,7 +115,6 @@ The smallest exact tile payload is selected and written into the `.prsl` contain
 
 Planned research directions include:
 
-- Golomb-Rice residual coding
 - rANS entropy coding
 - QOI-style pixel cache
 - JPEG XL-style weighted predictor

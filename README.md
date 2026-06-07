@@ -32,6 +32,8 @@ Pressel is a Rust project with two related goals:
 
 Pressel is not PNG, JPEG-LS, WebP, QOI, or JPEG XL compatible. It borrows ideas from those codec families, but implements its own pipeline from scratch and does not copy source code from existing codecs.
 
+The current `v0.4.0` prototype prioritizes exactness and compression ratio over encode speed. For larger images, multi-core encoding is available through `--cores <N>`.
+
 ## Strict Lossless Guarantee
 
 Pressel is strictly lossless with respect to decoded RGBA pixel data.
@@ -76,7 +78,7 @@ pressel encode examples/sample.png examples/sample.prsl
 pressel decode examples/sample.prsl examples/restored.png
 pressel verify examples/sample.png examples/sample.prsl
 pressel compare examples/sample.png examples/restored.png
-pressel bench examples/
+pressel bench examples/ --cores 4
 ```
 
 If `pressel` is not on your `PATH`, run the same commands through the built binary directly:
@@ -102,7 +104,9 @@ Use this sequence on a fresh clone:
 5. Decode it with `./target/release/pressel decode examples/sample.prsl examples/restored.png`.
 6. Verify strict equality with `./target/release/pressel verify examples/sample.png examples/sample.prsl`.
 7. Compare the source and restored images with `./target/release/pressel compare examples/sample.png examples/restored.png`.
-8. Run the benchmark with `./target/release/pressel bench examples/`.
+8. Run the benchmark with `./target/release/pressel bench examples/ --cores 4`.
+
+Both `encode` and `bench` accept an optional `--cores <N>` flag. If omitted, Pressel uses `1` core by default.
 
 Expected results:
 
@@ -117,16 +121,16 @@ For the automated test suite, run:
 cargo test
 ```
 
-That covers strict RGBA roundtrips, transparent hidden RGB preservation, non-64-aligned dimensions, every transform, every predictor, both entropy backends, and the full encode/decode/verify flow.
+That covers strict RGBA roundtrips, transparent hidden RGB preservation, non-64-aligned dimensions, every transform, every predictor, all entropy backends, and the full encode/decode/verify flow.
 
 ## Commands
 
 ```text
-pressel encode <input-image> <output.prsl>
+pressel encode <input-image> <output.prsl> [--cores <usize>]
 pressel decode <input.prsl> <output.png>
 pressel verify <input-image> <input.prsl>
 pressel compare <first-image> <second-image>
-pressel bench <folder>
+pressel bench <folder> [--cores <usize>]
 pressel make-demo-image <output.png> [--seed <u64>]
 ```
 
@@ -137,11 +141,11 @@ pressel make-demo-image <output.png> [--seed <u64>]
 - Extension: `.prsl`
 - Magic bytes: `PRSL1`
 - Channels: RGBA8 only in v1
-- Tile size: 64x64 in v1
+- Tile size: stored per file, chosen from an exact whole-image search
 - Per-tile strategy selection
 - SHA-256 hash of the original raw RGBA byte stream
 
-Each tile independently tries multiple reversible transform, predictor, and entropy combinations, then stores the smallest exact result.
+Each tile independently tries multiple reversible transform, predictor, and entropy combinations, then stores the smallest exact result. The current search space includes fixed-width bytewise transforms, an exact structured-plane transform, adaptive predictor maps, and raw or Zstd payload storage. The encoder also searches a small set of whole-image tile sizes and can parallelize tile encoding when `--cores` is greater than `1`.
 
 When decoding back to PNG, Pressel reconstructs the original RGBA pixels exactly, but it does not attempt to recreate the original PNG file bytes exactly.
 
@@ -170,12 +174,14 @@ Reported metrics include:
 - selected entropy backend counts
 - verification result
 
+`encode` and `bench` default to `1` core. Use `--cores <N>` when you want faster encode-time experiments on larger images.
+
 Example local results:
 
-| Image | PNG size | First-generation PRSL | Second-generation PRSL | Third-generation PRSL | Exact RGBA match |
-|---|---:|---:|---:|---:|---|
-| synthetic demo (`--seed 42`) | 58,770 bytes | 7,633 bytes | 6,745 bytes | 6,745 bytes | true |
-| rural photo | 3,891,380 bytes | 2,908,487 bytes | 2,908,487 bytes | 2,907,378 bytes | true |
+| Image | PNG size | First-generation PRSL | Second-generation PRSL | Third-generation PRSL | Fourth-generation PRSL | Exact RGBA match |
+|---|---:|---:|---:|---:|---:|---|
+| synthetic demo (`--seed 42`) | 58,770 bytes | 7,633 bytes | 6,745 bytes | 6,745 bytes | 1,895 bytes | true |
+| rural photo | 3,891,380 bytes | 2,908,487 bytes | 2,908,487 bytes | 2,907,368 bytes | 2,840,040 bytes | true |
 
 For the rural photo example, `verify` reported matching decoded RGBA hashes:
 
@@ -196,16 +202,14 @@ Pressel is designed as a research codec, not just a file converter.
 
 ## Version Goal
 
-This project is currently positioned as `v0.3.0`: a more capable research prototype with `encode`, `decode`, `verify`, `compare`, `bench`, and demo-image commands, documentation, strict roundtrip tests, CI, safer decode validation, an expanded reversible transform set, and adaptive predictor maps.
+This project is currently positioned as `v0.4.0`: a more capable research prototype with `encode`, `decode`, `verify`, `compare`, `bench`, and demo-image commands, documentation, strict roundtrip tests, CI, safer decode validation, an expanded reversible transform set, adaptive tile-size search, structured exact plane modeling, and aggressive exact compression experiments over raw and Zstd-backed tile payloads.
 
 ## Roadmap
 
-- Golomb-Rice residual coding
 - rANS entropy coding
 - QOI-style pixel cache mode
 - JPEG XL-style weighted predictor
 - per-tile image classifier
-- multithreaded tile encoding
 
 ## License
 

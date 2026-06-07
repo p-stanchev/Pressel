@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TileBounds {
@@ -9,12 +9,16 @@ pub struct TileBounds {
 }
 
 impl TileBounds {
-    pub fn pixel_count(self) -> usize {
-        self.width as usize * self.height as usize
+    pub fn pixel_count(self) -> Result<usize> {
+        usize::from(self.width)
+            .checked_mul(usize::from(self.height))
+            .ok_or_else(|| anyhow::anyhow!("tile pixel count overflow"))
     }
 
-    pub fn byte_len(self) -> usize {
-        self.pixel_count() * 4
+    pub fn byte_len(self) -> Result<usize> {
+        self.pixel_count()?
+            .checked_mul(4)
+            .ok_or_else(|| anyhow::anyhow!("tile byte length overflow"))
     }
 }
 
@@ -48,11 +52,16 @@ pub fn extract_tile_rgba(
 ) -> Result<Vec<u8>> {
     validate_rgba_len(rgba, image_width, image_height)?;
     validate_tile_bounds(tile, image_width, image_height)?;
-    let mut out = Vec::with_capacity(tile.byte_len());
+    let mut out = Vec::with_capacity(tile.byte_len()?);
     for row in 0..tile.height as u32 {
         let src_y = tile.y + row;
-        let start = ((src_y * image_width + tile.x) * 4) as usize;
-        let end = start + tile.width as usize * 4;
+        let start = rgba_offset(src_y, tile.x, image_width)?;
+        let row_bytes = usize::from(tile.width)
+            .checked_mul(4)
+            .ok_or_else(|| anyhow::anyhow!("tile row byte length overflow"))?;
+        let end = start
+            .checked_add(row_bytes)
+            .ok_or_else(|| anyhow::anyhow!("tile extraction end offset overflow"))?;
         out.extend_from_slice(&rgba[start..end]);
     }
     Ok(out)
@@ -67,22 +76,37 @@ pub fn write_tile_rgba(
 ) -> Result<()> {
     validate_rgba_len(dst_rgba, image_width, image_height)?;
     validate_tile_bounds(tile, image_width, image_height)?;
-    if tile_rgba.len() != tile.byte_len() {
+    if tile_rgba.len() != tile.byte_len()? {
         bail!("tile byte length mismatch");
     }
+    let row_bytes = usize::from(tile.width)
+        .checked_mul(4)
+        .ok_or_else(|| anyhow::anyhow!("tile row byte length overflow"))?;
     for row in 0..tile.height as u32 {
         let dst_y = tile.y + row;
-        let dst_start = ((dst_y * image_width + tile.x) * 4) as usize;
-        let dst_end = dst_start + tile.width as usize * 4;
-        let src_start = row as usize * tile.width as usize * 4;
-        let src_end = src_start + tile.width as usize * 4;
+        let dst_start = rgba_offset(dst_y, tile.x, image_width)?;
+        let dst_end = dst_start
+            .checked_add(row_bytes)
+            .ok_or_else(|| anyhow::anyhow!("tile write end offset overflow"))?;
+        let src_start = usize::try_from(row)
+            .context("tile row index exceeds platform usize")?
+            .checked_mul(row_bytes)
+            .ok_or_else(|| anyhow::anyhow!("tile source row offset overflow"))?;
+        let src_end = src_start
+            .checked_add(row_bytes)
+            .ok_or_else(|| anyhow::anyhow!("tile source end offset overflow"))?;
         dst_rgba[dst_start..dst_end].copy_from_slice(&tile_rgba[src_start..src_end]);
     }
     Ok(())
 }
 
 fn validate_rgba_len(rgba: &[u8], width: u32, height: u32) -> Result<()> {
-    let expected = width as usize * height as usize * 4;
+    let expected = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| anyhow::anyhow!("RGBA buffer expected length overflow"))?;
+    let expected =
+        usize::try_from(expected).context("RGBA buffer expected length exceeds platform usize")?;
     if rgba.len() != expected {
         bail!(
             "RGBA buffer length mismatch: expected {expected}, got {}",
@@ -93,8 +117,14 @@ fn validate_rgba_len(rgba: &[u8], width: u32, height: u32) -> Result<()> {
 }
 
 fn validate_tile_bounds(tile: TileBounds, image_width: u32, image_height: u32) -> Result<()> {
-    let x2 = tile.x + tile.width as u32;
-    let y2 = tile.y + tile.height as u32;
+    let x2 = tile
+        .x
+        .checked_add(u32::from(tile.width))
+        .ok_or_else(|| anyhow::anyhow!("tile x bound overflow"))?;
+    let y2 = tile
+        .y
+        .checked_add(u32::from(tile.height))
+        .ok_or_else(|| anyhow::anyhow!("tile y bound overflow"))?;
     if x2 > image_width || y2 > image_height {
         bail!(
             "tile out of bounds: ({}, {}) {}x{} outside {}x{}",
@@ -107,4 +137,15 @@ fn validate_tile_bounds(tile: TileBounds, image_width: u32, image_height: u32) -
         );
     }
     Ok(())
+}
+
+fn rgba_offset(y: u32, x: u32, image_width: u32) -> Result<usize> {
+    let pixel_index = u64::from(y)
+        .checked_mul(u64::from(image_width))
+        .and_then(|n| n.checked_add(u64::from(x)))
+        .context("RGBA pixel offset overflow")?;
+    let byte_index = pixel_index
+        .checked_mul(4)
+        .context("RGBA byte offset overflow")?;
+    usize::try_from(byte_index).context("RGBA byte offset exceeds platform usize")
 }

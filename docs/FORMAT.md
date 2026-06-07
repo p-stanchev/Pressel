@@ -7,7 +7,7 @@
 - Extension: `.prsl`
 - Magic bytes: `PRSL1`
 - Pixel model in v1: RGBA8 only
-- Tiling: 64x64 tiles in v1
+- Tiling: rectangular tiles with per-file `tile_size`
 
 Pressel v1 stores enough metadata to decode the image exactly and verify that the reconstructed RGBA byte stream matches the original input.
 
@@ -41,7 +41,7 @@ Each tile stores:
 - `compressed_payload_len: u32`
 - `compressed_payload: [u8]`
 
-Tiles are independent coding units. Edge tiles may be smaller than 64x64.
+Tiles are independent coding units. Edge tiles may be smaller than the chosen file tile size.
 
 ## Transform IDs
 
@@ -52,7 +52,8 @@ Implemented in v1:
 - `2`: Reversible YCoCg-R
 - `3`: Alpha-plane separation
 - `4`: Green average decorrelation
-- `5`: Palette/index packed transform for suitable tiles
+- `5`: Fixed-width palette/index packed transform for suitable tiles
+- `6`: Structured exact plane transform
 
 Subtract-green uses:
 
@@ -69,7 +70,19 @@ Alpha-plane separation stores the alpha channel as a separate leading plane foll
 
 Green average decorrelation keeps `R` and `B` unchanged while storing `G' = G - floor((R + B) / 2) mod 256`.
 
-The palette/index packed transform is only used on tiles where the exact colors fit into a compact palette representation inside the fixed-width transformed tile buffer.
+The fixed-width palette/index transform is only used on tiles where the exact colors fit into a compact palette representation inside the transformed tile buffer.
+
+The structured exact plane transform splits RGBA into separate planes and lets each plane choose an exact reversible submode. Current plane submodes include:
+
+- raw plane storage
+- constant plane storage
+- global affine sparse plane modeling
+- row-affine sparse plane modeling
+- palette RLE plane modeling
+- palette bit-packed plane modeling
+- block-pulse plane modeling
+
+These submodes are internal to transform `6` and remain strictly lossless because they reconstruct the original plane bytes exactly.
 
 ## Predictor IDs
 
@@ -92,7 +105,7 @@ The adaptive predictor mode stores a compact per-block predictor map at the star
 Implemented in v1:
 
 - `0`: Raw residual stream
-- `1`: Zstd-compressed residual stream
+- `1`: Zstd-compressed residual or special-transform payload stream
 
 ## Decoding Process
 

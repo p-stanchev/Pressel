@@ -10,6 +10,8 @@ The benchmark command recursively scans a folder for decodable images. For each 
 4. verifies exact RGBA equality
 5. writes one CSV row to `bench.csv`
 
+`pressel bench` accepts an optional `--cores <N>` flag. If omitted, it runs with `1` core.
+
 The command benchmarks source image files that the `image` crate can decode. It does not treat existing `.prsl` files in the folder as benchmark inputs.
 
 ## Recorded Metrics
@@ -35,6 +37,7 @@ Useful interpretations include:
 
 - smaller `.prsl` size indicates better compression for this codec version
 - encode and decode time show the computational cost of strategy search
+- `--cores` changes wall-clock encode time, not the exact decoded result
 - transform/predictor/backend counts show which coding decisions were selected
 - verification must remain `true`; any false result indicates a correctness failure
 

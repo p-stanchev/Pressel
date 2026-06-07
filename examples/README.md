@@ -19,3 +19,9 @@ To generate a different reproducible sample, provide a seed:
 ```
 
 You can also place your own test images here if you have the right to use them.
+
+If you want faster experiments on larger files, use the optional `--cores <N>` flag with `encode` or `bench`, for example:
+
+```bash
+./target/release/pressel encode examples/sample.png examples/sample.prsl --cores 4
+```

@@ -64,15 +64,46 @@ Pressel should be understood as a modular research codec. The project is not cla
 - residual coding strategies
 - benchmark-driven comparison across image classes
 
+## Research Methodology
+
+Pressel development follows a simple experimental workflow:
+
+1. Choose or generate an input corpus.
+   Inputs may include synthetic demo images, natural photos, screenshots, pixel art, gradients, noisy images, or transparency-heavy assets.
+
+2. Normalize every source image to RGBA8.
+   This creates a single canonical decoded signal for hashing, verification, and exact comparison across experiments.
+
+3. Search exact coding strategies.
+   The encoder explores tile sizes, reversible transforms, predictors, and entropy backends while preserving strict decoded-pixel identity.
+
+4. Select the smallest exact result.
+   For each candidate path, Pressel measures encoded size and keeps the smallest one that remains fully reversible.
+
+5. Decode and verify the output.
+   Every experiment is validated by reconstructing RGBA bytes and comparing them exactly against the original RGBA signal.
+
+6. Record benchmark results.
+   The benchmark workflow captures output size, ratio, encode time, decode time, and which coding decisions were selected.
+
+7. Compare generations.
+   Changes to the codec are judged by measured results, not by intuition alone. If a new idea does not improve compression or maintain correctness, it should not be treated as a win.
+
+This workflow is intentionally strict. Pressel does not accept visually-lossless approximations, hidden-RGB cleanup, or any other shortcut that would weaken byte-identical decoded RGBA reconstruction.
+
 ## Current Scope
 
-The current `v0.3.0` research prototype focuses on:
+The current `v0.4.0` research prototype focuses on:
 
 - `.prsl` v1 container design
 - strict RGBA verification
 - a reversible tile pipeline
 - expanded reversible transform search
+- adaptive whole-image tile-size search
+- structured exact plane modeling for low-cardinality and patterned channels
 - adaptive per-block predictor selection
+- raw and Zstd-backed exact payload search
+- optional multi-core tile encoding for long-running experiments
 - benchmark generation through `bench.csv`
 - safer decode validation and CI-backed testing
 
