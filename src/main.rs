@@ -5,6 +5,7 @@ mod demo;
 mod encode;
 mod entropy;
 mod format;
+mod png_chunks;
 mod predict;
 #[cfg(test)]
 mod tests;
@@ -33,10 +34,20 @@ enum Command {
         output_prsl: PathBuf,
         #[arg(long, default_value_t = 1)]
         cores: usize,
+        #[arg(long)]
+        preserve_png_metadata: bool,
+        #[arg(long)]
+        preserve_png_chunks: bool,
+        #[arg(long)]
+        preserve_source_file: bool,
     },
     Decode {
         input_prsl: PathBuf,
-        output_png: PathBuf,
+        output_png: Option<PathBuf>,
+        #[arg(long)]
+        export_png: Option<PathBuf>,
+        #[arg(long)]
+        extract_source_file: Option<PathBuf>,
     },
     Verify {
         input_image: PathBuf,
@@ -65,11 +76,30 @@ fn main() -> Result<()> {
             input_image,
             output_prsl,
             cores,
-        } => encode::run_encode(&input_image, &output_prsl, cores),
+            preserve_png_metadata,
+            preserve_png_chunks,
+            preserve_source_file,
+        } => encode::run_encode(
+            &input_image,
+            &output_prsl,
+            encode::EncodeOptions {
+                cores,
+                preserve_png_metadata,
+                preserve_png_chunks,
+                preserve_source_file,
+            },
+        ),
         Command::Decode {
             input_prsl,
             output_png,
-        } => decode::run_decode(&input_prsl, &output_png),
+            export_png,
+            extract_source_file,
+        } => decode::run_decode(
+            &input_prsl,
+            output_png.as_deref(),
+            export_png.as_deref(),
+            extract_source_file.as_deref(),
+        ),
         Command::Verify {
             input_image,
             input_prsl,

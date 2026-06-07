@@ -13,11 +13,14 @@ input image
 → encode residuals
 → compress residual stream
 → choose smallest exact tile strategy
+→ optionally store PNG preservation sections
 → write `.prsl`
 
 ## Input Normalization
 
 The encoder decodes the source image and converts it to RGBA8. This normalized raw RGBA byte stream is the canonical signal used by Pressel for hashing, verification, and exact roundtrip testing.
+
+If PNG preservation flags are enabled and the input is a PNG, the encoder can also parse ancillary PNG chunks or preserve the full original file as optional side data. This side data does not change the decoded RGBA correctness rule.
 
 ## Tiling
 
@@ -81,6 +84,8 @@ Pressel v1 currently tries these predictors for every tile:
 - Paeth
 - JPEG-LS MED-style predictor
 - Adaptive 8x8 block predictor map
+- Edge-guided deterministic predictor
+- Photo-guided RGB predictor
 
 Predictors are applied per byte channel within the transformed tile. The residual is stored as:
 
@@ -91,6 +96,10 @@ and reconstructed as:
 `actual = predicted + residual mod 256`
 
 In the adaptive predictor mode, each 8x8 block inside a tile picks the best base predictor from the implemented set, and the block map is stored alongside the residual stream.
+
+The edge-guided predictor chooses between left-, top-, and clamped-gradient-style prediction per sample using only already-decoded neighbors, so it adds no side data.
+
+The photo-guided predictor stores a compact per-tile prefix that selects green/chroma base predictors and fixed-point green-coupling coefficients for red and blue. It reconstructs green first and then predicts red and blue from the reconstructed green value, which is aimed at photo-like RGB edge correlation.
 
 ## Entropy Backends
 
@@ -114,6 +123,23 @@ For each tile, Pressel enumerates:
 - every implemented entropy backend
 
 The smallest exact tile payload is selected and written into the `.prsl` container with its strategy identifiers.
+
+## Optional PNG Preservation
+
+After the required image and tile payloads are selected, Pressel may append optional tagged sections:
+
+- preserved common PNG metadata chunks
+- preserved ancillary PNG chunk records
+- preserved original source file bytes
+
+These sections are independent of the core RGBA coding path.
+
+- default mode stores none of them
+- metadata mode stores only a curated common subset
+- chunk mode stores all ancillary chunks and subsumes metadata mode
+- source-file mode stores the original PNG byte-for-byte
+
+When exporting PNG from `.prsl`, Pressel regenerates critical PNG structure from decoded RGBA and then reattaches preserved ancillary chunks only when their placement is valid and safe.
 
 ## Future Work
 

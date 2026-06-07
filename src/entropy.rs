@@ -1,4 +1,4 @@
-use crate::predict::{ADAPTIVE_PREDICTOR_ID, expected_residual_len};
+use crate::predict::{expected_residual_len, residual_prefix_len};
 use anyhow::{Context, Result, bail};
 use std::io::Cursor;
 
@@ -158,13 +158,13 @@ fn decode_channel_split_payload(
     let pixel_count = usize::from(width)
         .checked_mul(usize::from(height))
         .context("channel-split pixel count overflow")?;
-    let map_len = residual_map_len(width, height, predictor_id)?;
-    let map_bytes = zstd::stream::decode_all(Cursor::new(segments[0]))?;
-    if map_bytes.len() != map_len {
+    let prefix_len = residual_prefix_len(width, height, predictor_id)?;
+    let prefix_bytes = zstd::stream::decode_all(Cursor::new(segments[0]))?;
+    if prefix_bytes.len() != prefix_len {
         bail!(
-            "channel-split map length mismatch: expected {}, got {}",
-            map_len,
-            map_bytes.len()
+            "channel-split prefix length mismatch: expected {}, got {}",
+            prefix_len,
+            prefix_bytes.len()
         );
     }
 
@@ -184,7 +184,7 @@ fn decode_channel_split_payload(
         channels[channel] = bytes;
     }
 
-    merge_residual_stream(&map_bytes, &channels)
+    merge_residual_stream(&prefix_bytes, &channels)
 }
 
 fn split_residual_stream(
@@ -204,9 +204,9 @@ fn split_residual_stream(
     let pixel_count = usize::from(width)
         .checked_mul(usize::from(height))
         .context("channel-split pixel count overflow")?;
-    let map_len = residual_map_len(width, height, predictor_id)?;
-    let map_bytes = residuals[..map_len].to_vec();
-    let body = &residuals[map_len..];
+    let prefix_len = residual_prefix_len(width, height, predictor_id)?;
+    let prefix_bytes = residuals[..prefix_len].to_vec();
+    let body = &residuals[prefix_len..];
     if body.len() != pixel_count * 4 {
         bail!("channel-split residual body length mismatch");
     }
@@ -216,10 +216,10 @@ fn split_residual_stream(
             channels[channel].push(chunk[channel]);
         }
     }
-    Ok((map_bytes, channels))
+    Ok((prefix_bytes, channels))
 }
 
-fn merge_residual_stream(map_bytes: &[u8], channels: &[Vec<u8>; 4]) -> Result<Vec<u8>> {
+fn merge_residual_stream(prefix_bytes: &[u8], channels: &[Vec<u8>; 4]) -> Result<Vec<u8>> {
     let pixel_count = channels[0].len();
     for channel in channels.iter().skip(1) {
         if channel.len() != pixel_count {
@@ -227,7 +227,7 @@ fn merge_residual_stream(map_bytes: &[u8], channels: &[Vec<u8>; 4]) -> Result<Ve
         }
     }
     let mut out = Vec::with_capacity(
-        map_bytes
+        prefix_bytes
             .len()
             .checked_add(
                 pixel_count
@@ -236,7 +236,7 @@ fn merge_residual_stream(map_bytes: &[u8], channels: &[Vec<u8>; 4]) -> Result<Ve
             )
             .context("merge residual allocation overflow")?,
     );
-    out.extend_from_slice(map_bytes);
+    out.extend_from_slice(prefix_bytes);
     for (((c0, c1), c2), c3) in channels[0]
         .iter()
         .zip(channels[1].iter())
@@ -249,21 +249,6 @@ fn merge_residual_stream(map_bytes: &[u8], channels: &[Vec<u8>; 4]) -> Result<Ve
         out.push(*c3);
     }
     Ok(out)
-}
-
-fn residual_map_len(width: u16, height: u16, predictor_id: u8) -> Result<usize> {
-    let total_len = expected_residual_len(width, height, predictor_id)?;
-    let pixel_bytes = usize::from(width)
-        .checked_mul(usize::from(height))
-        .and_then(|n| n.checked_mul(4))
-        .context("residual map pixel byte count overflow")?;
-    if predictor_id == ADAPTIVE_PREDICTOR_ID {
-        total_len
-            .checked_sub(pixel_bytes)
-            .context("adaptive residual map length underflow")
-    } else {
-        Ok(0)
-    }
 }
 
 fn read_u32_lengths(payload: &[u8]) -> Result<[u32; CHANNEL_SPLIT_HEADER_U32S]> {

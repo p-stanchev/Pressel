@@ -2,6 +2,10 @@ use crate::entropy::decode_residual_payload;
 use crate::format::{
     CHANNELS_RGBA8, MAX_RGBA_BYTES, PresselFile, TileHeader, rgba_byte_len_u64, rgba_sha256,
 };
+use crate::png_chunks::{
+    TAG_ORIGINAL_SOURCE_FILE, TAG_PNG_ANCILLARY_CHUNKS, TAG_PNG_METADATA_CHUNKS,
+    decode_chunk_records, restore_preserved_chunks,
+};
 use crate::predict::decode_residuals;
 use crate::tiles::{TileBounds, write_tile_rgba};
 use crate::transform::{decode_special_transform, is_special_transform, reverse_transform};
@@ -13,19 +17,53 @@ use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 
-pub fn run_decode(input_prsl: &Path, output_png: &Path) -> Result<()> {
+pub fn run_decode(
+    input_prsl: &Path,
+    output_png: Option<&Path>,
+    export_png: Option<&Path>,
+    extract_source_file: Option<&Path>,
+) -> Result<()> {
     let bytes =
         fs::read(input_prsl).with_context(|| format!("reading {}", input_prsl.display()))?;
     let decoded = decode_prsl_bytes(&bytes)?;
-    let file = fs::File::create(output_png)
-        .with_context(|| format!("creating {}", output_png.display()))?;
-    let encoder = PngEncoder::new(file);
-    encoder.write_image(
-        &decoded.rgba,
-        decoded.width,
-        decoded.height,
-        ColorType::Rgba8.into(),
-    )?;
+    if let Some(extract_path) = extract_source_file {
+        let source = decoded
+            .original_source_file
+            .as_ref()
+            .context("no preserved original source file is stored in this .prsl")?;
+        fs::write(extract_path, source)
+            .with_context(|| format!("writing {}", extract_path.display()))?;
+    }
+
+    let png_target = match (output_png, export_png) {
+        (Some(_), Some(_)) => bail!("use either positional output PNG or --export-png, not both"),
+        (Some(path), None) => Some(path),
+        (None, Some(path)) => Some(path),
+        (None, None) => None,
+    };
+
+    if let Some(output_path) = png_target {
+        let mut png_bytes = Vec::new();
+        {
+            let encoder = PngEncoder::new(Cursor::new(&mut png_bytes));
+            encoder.write_image(
+                &decoded.rgba,
+                decoded.width,
+                decoded.height,
+                ColorType::Rgba8.into(),
+            )?;
+        }
+        let (restored_png, warnings) = restore_preserved_chunks(
+            &png_bytes,
+            &decoded.png_metadata_chunks,
+            &decoded.png_ancillary_chunks,
+        )?;
+        for warning in warnings {
+            eprintln!("warning: {warning}");
+        }
+        fs::write(output_path, restored_png)
+            .with_context(|| format!("writing {}", output_path.display()))?;
+    }
     Ok(())
 }
 
@@ -34,11 +72,27 @@ pub struct DecodedImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    pub png_metadata_chunks: Vec<crate::png_chunks::PngChunkRecord>,
+    pub png_ancillary_chunks: Vec<crate::png_chunks::PngChunkRecord>,
+    pub original_source_file: Option<Vec<u8>>,
 }
 
 pub fn decode_prsl_bytes(bytes: &[u8]) -> Result<DecodedImage> {
     let mut cursor = Cursor::new(bytes);
     let prsl = PresselFile::read_from(&mut cursor)?;
+    let metadata_section = prsl
+        .sections
+        .iter()
+        .find(|section| section.tag_type == TAG_PNG_METADATA_CHUNKS);
+    let ancillary_section = prsl
+        .sections
+        .iter()
+        .find(|section| section.tag_type == TAG_PNG_ANCILLARY_CHUNKS);
+    let source_file = prsl
+        .sections
+        .iter()
+        .find(|section| section.tag_type == TAG_ORIGINAL_SOURCE_FILE)
+        .map(|section| section.payload.clone());
     if prsl.header.channels != CHANNELS_RGBA8 {
         bail!("unsupported channel count: {}", prsl.header.channels);
     }
@@ -76,6 +130,15 @@ pub fn decode_prsl_bytes(bytes: &[u8]) -> Result<DecodedImage> {
         width: prsl.header.width,
         height: prsl.header.height,
         rgba,
+        png_metadata_chunks: match metadata_section {
+            Some(section) => decode_chunk_records(&section.payload)?,
+            None => Vec::new(),
+        },
+        png_ancillary_chunks: match ancillary_section {
+            Some(section) => decode_chunk_records(&section.payload)?,
+            None => Vec::new(),
+        },
+        original_source_file: source_file,
     })
 }
 

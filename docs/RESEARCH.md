@@ -31,6 +31,8 @@ Pressel targets decoded-pixel identity in RGBA8 form. It does not require that t
 
 In practical terms, this means Pressel behaves as a strictly lossless image codec, not as a byte-for-byte PNG archiver. Re-encoded PNG output may differ in file size or binary layout even when the decoded pixels are identical.
 
+Pressel can optionally preserve PNG metadata, ancillary chunks, or the full original source file as extra container data. These options do not change the primary correctness rule: decoded RGBA identity remains the required guarantee.
+
 ## Why Strict Losslessness Matters
 
 Strict losslessness matters for:
@@ -77,6 +79,8 @@ Pressel development follows a simple experimental workflow:
 3. Search exact coding strategies.
    The encoder explores tile sizes, reversible transforms, predictors, and entropy backends while preserving strict decoded-pixel identity.
 
+   Optional PNG preservation is handled separately from tile coding. It may preserve metadata or chunk bytes for later export, but it does not weaken or replace RGBA verification.
+
 4. Select the smallest exact result.
    For each candidate path, Pressel measures encoded size and keeps the smallest one that remains fully reversible.
 
@@ -93,7 +97,7 @@ This workflow is intentionally strict. Pressel does not accept visually-lossless
 
 ## Current Scope
 
-The current `v0.5.0` research prototype focuses on:
+The current `v0.6.0` research prototype focuses on:
 
 - `.prsl` v1 container design
 - strict RGBA verification
@@ -102,7 +106,10 @@ The current `v0.5.0` research prototype focuses on:
 - adaptive whole-image tile-size search
 - structured exact plane modeling for low-cardinality and patterned channels
 - adaptive per-block predictor selection
+- decoder-deterministic edge-guided prediction
+- photo-guided RGB prediction with per-tile coupling parameters
 - raw, Zstd, folded-residual, and channel-separated exact payload search
+- optional PNG metadata/chunk/source-file preservation tags
 - optional multi-core tile encoding for long-running experiments
 - benchmark generation through `bench.csv`
 - safer decode validation and CI-backed testing

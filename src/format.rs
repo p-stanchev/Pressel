@@ -38,9 +38,16 @@ pub struct EncodedTile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaggedSection {
+    pub tag_type: u16,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PresselFile {
     pub header: PresselHeader,
     pub tiles: Vec<EncodedTile>,
+    pub sections: Vec<TaggedSection>,
 }
 
 pub fn rgba_sha256(bytes: &[u8]) -> [u8; 32] {
@@ -160,6 +167,11 @@ impl PresselFile {
             tile.header.write_to(writer)?;
             writer.write_all(&tile.payload)?;
         }
+        for section in &self.sections {
+            writer.write_all(&section.tag_type.to_le_bytes())?;
+            writer.write_all(&(section.payload.len() as u64).to_le_bytes())?;
+            writer.write_all(&section.payload)?;
+        }
         Ok(())
     }
 
@@ -191,7 +203,29 @@ impl PresselFile {
                 payload,
             });
         }
-        Ok(Self { header, tiles })
+        let mut sections = Vec::new();
+        loop {
+            let mut tag_buf = [0_u8; 2];
+            match reader.read_exact(&mut tag_buf) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(err) => return Err(err.into()),
+            }
+            let tag_type = u16::from_le_bytes(tag_buf);
+            let tag_len = read_u64(reader)?;
+            let payload_len =
+                usize::try_from(tag_len).context("tag payload length exceeds platform usize")?;
+            let mut payload = vec![0_u8; payload_len];
+            reader
+                .read_exact(&mut payload)
+                .with_context(|| format!("failed reading tagged section 0x{tag_type:04x}"))?;
+            sections.push(TaggedSection { tag_type, payload });
+        }
+        Ok(Self {
+            header,
+            tiles,
+            sections,
+        })
     }
 }
 
@@ -211,6 +245,12 @@ fn read_u32<R: Read>(reader: &mut R) -> Result<u32> {
     let mut buf = [0_u8; 4];
     reader.read_exact(&mut buf)?;
     Ok(u32::from_le_bytes(buf))
+}
+
+fn read_u64<R: Read>(reader: &mut R) -> Result<u64> {
+    let mut buf = [0_u8; 8];
+    reader.read_exact(&mut buf)?;
+    Ok(u64::from_le_bytes(buf))
 }
 
 pub fn rgba_byte_len_u64(width: u32, height: u32) -> Result<u64> {

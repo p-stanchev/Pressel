@@ -27,6 +27,9 @@ pub fn run_bench(folder: &Path, cores: usize) -> Result<()> {
 
     let options = EncodeOptions {
         cores: cores.max(1),
+        preserve_png_metadata: false,
+        preserve_png_chunks: false,
+        preserve_source_file: false,
     };
 
     for entry in WalkDir::new(folder)
@@ -52,6 +55,7 @@ pub fn run_bench(folder: &Path, cores: usize) -> Result<()> {
             rgba.height(),
             rgba.as_raw(),
             options,
+            Vec::new(),
         )
         .with_context(|| format!("encoding {}", path.display()))?;
         let encode_time_ms = encode_start.elapsed().as_secs_f64() * 1000.0;

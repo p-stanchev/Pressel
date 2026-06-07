@@ -41,6 +41,13 @@ Useful interpretations include:
 - transform/predictor/backend counts show which coding decisions were selected
 - verification must remain `true`; any false result indicates a correctness failure
 
+When benchmarking preservation-aware `.prsl` files, it helps to separate:
+
+- core compression progression across codec generations
+- preservation overhead from optional PNG metadata, ancillary chunk, or source-file storage
+
+Those preservation modes should be reported explicitly rather than mixed into the main generation-to-generation compression table, because they measure completeness tradeoffs rather than pure image-signal compression.
+
 ## Future Cross-Codec Comparisons
 
 Future benchmark studies may compare Pressel against:

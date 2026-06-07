@@ -1,9 +1,14 @@
 use crate::decode::decode_prsl_bytes;
-use crate::encode::encode_rgba_to_prsl_bytes;
+use crate::decode::run_decode;
+use crate::encode::{EncodeOptions, encode_rgba_to_prsl_bytes, run_encode};
 use crate::entropy::{
     decode_payload, decode_residual_payload, encode_payload, encode_residual_payload,
 };
-use crate::format::{CHANNELS_RGBA8, DEFAULT_TILE_SIZE, MAGIC_BYTES};
+use crate::format::{CHANNELS_RGBA8, DEFAULT_TILE_SIZE, MAGIC_BYTES, PresselFile};
+use crate::png_chunks::{
+    PLACEMENT_BEFORE_IDAT, TAG_ORIGINAL_SOURCE_FILE, TAG_PNG_ANCILLARY_CHUNKS,
+    TAG_PNG_METADATA_CHUNKS, chunk_record, decode_chunk_records, make_test_png_with_chunks,
+};
 use crate::predict::{PREDICTOR_COUNT, decode_residuals, encode_residuals, expected_residual_len};
 use crate::transform::{
     TRANSFORM_COUNT, apply_transform, decode_special_transform, encode_special_transform,
@@ -12,6 +17,7 @@ use crate::transform::{
 use crate::verify::run_verify;
 use image::{ImageBuffer, Rgba, RgbaImage};
 use std::fs;
+use std::io::Cursor;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn roundtrip_rgba(width: u32, height: u32, rgba: Vec<u8>) {
@@ -183,6 +189,17 @@ fn folded_channel_split_entropy_roundtrip() {
 }
 
 #[test]
+fn photo_guided_channel_split_entropy_roundtrip() {
+    let transformed = gradient(17, 9);
+    let residuals = encode_residuals(&transformed, 17, 9, 8).unwrap();
+    let encoded = encode_residual_payload(5, &residuals, 17, 9, 8).unwrap();
+    let decoded = decode_residual_payload(5, &encoded, 17, 9, 8).unwrap();
+    assert_eq!(decoded, residuals);
+    let reconstructed = decode_residuals(&decoded, 17, 9, 8).unwrap();
+    assert_eq!(reconstructed, transformed);
+}
+
+#[test]
 fn adaptive_channel_split_entropy_roundtrip() {
     let transformed = gradient(19, 13);
     let residuals = encode_residuals(&transformed, 19, 13, 6).unwrap();
@@ -246,4 +263,204 @@ fn decode_rejects_invalid_tile_count() {
 
     let err = decode_prsl_bytes(&bytes).unwrap_err();
     assert!(err.to_string().contains("tile count mismatch"));
+}
+
+#[test]
+fn default_encode_stores_no_png_preservation_sections() {
+    let (png_path, _base) = create_png_with_test_chunks();
+    let prsl_path = png_path.with_extension("prsl");
+    run_encode(
+        &png_path,
+        &prsl_path,
+        EncodeOptions {
+            cores: 1,
+            preserve_png_metadata: false,
+            preserve_png_chunks: false,
+            preserve_source_file: false,
+        },
+    )
+    .unwrap();
+    let bytes = fs::read(&prsl_path).unwrap();
+    let mut cursor = Cursor::new(bytes);
+    let prsl = PresselFile::read_from(&mut cursor).unwrap();
+    assert!(prsl.sections.is_empty());
+    let decoded = decode_prsl_bytes(&fs::read(&prsl_path).unwrap()).unwrap();
+    assert_eq!(decoded.png_metadata_chunks, Vec::new());
+    assert_eq!(decoded.png_ancillary_chunks, Vec::new());
+    assert!(decoded.original_source_file.is_none());
+    let _ = fs::remove_file(&png_path);
+    let _ = fs::remove_file(&prsl_path);
+}
+
+#[test]
+fn png_metadata_preservation_tag_is_stored() {
+    let (png_path, _base) = create_png_with_test_chunks();
+    let prsl_path = png_path.with_extension("prsl");
+    run_encode(
+        &png_path,
+        &prsl_path,
+        EncodeOptions {
+            cores: 1,
+            preserve_png_metadata: true,
+            preserve_png_chunks: false,
+            preserve_source_file: false,
+        },
+    )
+    .unwrap();
+    let bytes = fs::read(&prsl_path).unwrap();
+    let mut cursor = Cursor::new(bytes);
+    let prsl = PresselFile::read_from(&mut cursor).unwrap();
+    let section = prsl
+        .sections
+        .iter()
+        .find(|section| section.tag_type == TAG_PNG_METADATA_CHUNKS)
+        .expect("metadata tag should be present");
+    let records = decode_chunk_records(&section.payload).unwrap();
+    assert!(records.iter().any(|record| record.chunk_type == *b"gAMA"));
+    assert!(records.iter().any(|record| record.chunk_type == *b"tEXt"));
+    assert!(
+        prsl.sections
+            .iter()
+            .all(|section| section.tag_type != TAG_PNG_ANCILLARY_CHUNKS)
+    );
+    let _ = fs::remove_file(&png_path);
+    let _ = fs::remove_file(&prsl_path);
+}
+
+#[test]
+fn png_chunk_preservation_tag_is_stored() {
+    let (png_path, _base) = create_png_with_test_chunks();
+    let prsl_path = png_path.with_extension("prsl");
+    run_encode(
+        &png_path,
+        &prsl_path,
+        EncodeOptions {
+            cores: 1,
+            preserve_png_metadata: false,
+            preserve_png_chunks: true,
+            preserve_source_file: false,
+        },
+    )
+    .unwrap();
+    let bytes = fs::read(&prsl_path).unwrap();
+    let mut cursor = Cursor::new(bytes);
+    let prsl = PresselFile::read_from(&mut cursor).unwrap();
+    let section = prsl
+        .sections
+        .iter()
+        .find(|section| section.tag_type == TAG_PNG_ANCILLARY_CHUNKS)
+        .expect("ancillary chunk tag should be present");
+    let records = decode_chunk_records(&section.payload).unwrap();
+    assert!(records.iter().any(|record| record.chunk_type == *b"gAMA"));
+    assert!(records.iter().any(|record| record.chunk_type == *b"raNd"));
+    let _ = fs::remove_file(&png_path);
+    let _ = fs::remove_file(&prsl_path);
+}
+
+#[test]
+fn png_chunk_mode_subsumes_metadata_mode_without_duplicate_section() {
+    let (png_path, _base) = create_png_with_test_chunks();
+    let prsl_path = png_path.with_extension("prsl");
+    run_encode(
+        &png_path,
+        &prsl_path,
+        EncodeOptions {
+            cores: 1,
+            preserve_png_metadata: true,
+            preserve_png_chunks: true,
+            preserve_source_file: false,
+        },
+    )
+    .unwrap();
+    let bytes = fs::read(&prsl_path).unwrap();
+    let mut cursor = Cursor::new(bytes);
+    let prsl = PresselFile::read_from(&mut cursor).unwrap();
+    assert!(
+        prsl.sections
+            .iter()
+            .any(|section| section.tag_type == TAG_PNG_ANCILLARY_CHUNKS)
+    );
+    assert!(
+        prsl.sections
+            .iter()
+            .all(|section| section.tag_type != TAG_PNG_METADATA_CHUNKS)
+    );
+    let _ = fs::remove_file(&png_path);
+    let _ = fs::remove_file(&prsl_path);
+}
+
+#[test]
+fn preserve_source_file_extracts_exact_original_png() {
+    let (png_path, original_png_bytes) = create_png_with_test_chunks();
+    let prsl_path = png_path.with_extension("prsl");
+    let extracted_path = png_path.with_extension("extracted.png");
+    run_encode(
+        &png_path,
+        &prsl_path,
+        EncodeOptions {
+            cores: 1,
+            preserve_png_metadata: false,
+            preserve_png_chunks: false,
+            preserve_source_file: true,
+        },
+    )
+    .unwrap();
+    let bytes = fs::read(&prsl_path).unwrap();
+    let mut cursor = Cursor::new(bytes);
+    let prsl = PresselFile::read_from(&mut cursor).unwrap();
+    assert!(
+        prsl.sections
+            .iter()
+            .any(|section| section.tag_type == TAG_ORIGINAL_SOURCE_FILE)
+    );
+    run_decode(&prsl_path, None, None, Some(&extracted_path)).unwrap();
+    let extracted = fs::read(&extracted_path).unwrap();
+    assert_eq!(extracted, original_png_bytes);
+    let _ = fs::remove_file(&png_path);
+    let _ = fs::remove_file(&prsl_path);
+    let _ = fs::remove_file(&extracted_path);
+}
+
+fn create_png_with_test_chunks() -> (std::path::PathBuf, Vec<u8>) {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("pressel-meta-{stamp}.png"));
+    let image: RgbaImage = ImageBuffer::from_fn(4, 3, |x, y| {
+        Rgba([
+            (x * 31 + y * 17) as u8,
+            (x * 13 + y * 29) as u8,
+            (x * 7 + y * 19) as u8,
+            255,
+        ])
+    });
+    image.save(&path).unwrap();
+    let base = fs::read(&path).unwrap();
+    let enriched = make_test_png_with_chunks(
+        &base,
+        &[
+            chunk_record(
+                *b"gAMA",
+                PLACEMENT_BEFORE_IDAT,
+                vec![0, 0, 0xB1, 0x8F],
+                Some(false),
+            ),
+            chunk_record(
+                *b"tEXt",
+                PLACEMENT_BEFORE_IDAT,
+                b"Author\0Pressel".to_vec(),
+                Some(false),
+            ),
+            chunk_record(
+                *b"raNd",
+                PLACEMENT_BEFORE_IDAT,
+                b"side-data".to_vec(),
+                Some(true),
+            ),
+        ],
+    )
+    .unwrap();
+    fs::write(&path, &enriched).unwrap();
+    (path, enriched)
 }

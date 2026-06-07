@@ -27,6 +27,20 @@ The v1 header stores:
 
 The current implementation uses `channels = 4` for RGBA8.
 
+After the required tile data, v1 may optionally store tagged trailing sections:
+
+- `0x0001`: preserved PNG metadata chunk records
+- `0x0002`: preserved ancillary PNG chunk records
+- `0x0003`: original source file blob
+
+Each section is encoded as:
+
+- `tag_type: u16`
+- `tag_len: u64`
+- `tag_payload: [u8; tag_len]`
+
+These sections are optional. Default Pressel files omit them.
+
 ## Tile Layout
 
 Each tile stores:
@@ -42,6 +56,41 @@ Each tile stores:
 - `compressed_payload: [u8]`
 
 Tiles are independent coding units. Edge tiles may be smaller than the chosen file tile size.
+
+## Optional PNG Preservation Records
+
+Pressel regenerates critical PNG structure from decoded RGBA by default. It can optionally preserve extra PNG data for later export:
+
+- metadata mode stores a curated subset of useful ancillary metadata chunks
+- chunk mode stores all ancillary chunks with placement/order metadata
+- source-file mode stores the entire original PNG file byte-for-byte
+
+Chunk mode subsumes metadata mode. If both are enabled, ancillary chunks are stored once in chunk mode and metadata is not duplicated.
+
+Each preserved chunk record stores:
+
+- `chunk_type: [u8; 4]`
+- `placement: u8`
+- `flags: u8`
+- `original_crc: u32`
+- `data_len: u32`
+- `data: [u8; data_len]`
+
+Current placement values:
+
+- `0`: before `PLTE`
+- `1`: before `IDAT`
+- `2`: after `IDAT`
+- `3`: before `IEND`
+
+Current flags:
+
+- bit `0`: ancillary
+- bit `1`: safe-to-copy
+- bit `2`: known common metadata
+- bit `3`: unsafe to restore without warning
+
+Critical PNG chunks such as `IHDR`, `IDAT`, and `IEND` are not stored in metadata/chunk preservation mode. Exact original-file recovery is only available through the original-source-file tag.
 
 ## Transform IDs
 
@@ -95,10 +144,23 @@ Implemented in v1:
 - `4`: Paeth
 - `5`: JPEG-LS MED-style predictor
 - `6`: Adaptive 8x8 block predictor map
+- `7`: Edge-guided deterministic predictor
+- `8`: Photo-guided RGB predictor
 
 Predictors operate on transformed per-channel bytes. Residuals are encoded modulo 256.
 
 The adaptive predictor mode stores a compact per-block predictor map at the start of the residual stream, then encodes the tile using the selected predictor for each 8x8 block. This keeps the outer tile container unchanged while allowing more local predictor selection within a tile.
+
+The edge-guided predictor chooses among left-, top-, and clamped-gradient-style behavior per sample using only already-known neighbors, so it needs no side map.
+
+The photo-guided predictor stores a small per-tile prefix inside the residual stream that selects:
+
+- the spatial predictor used for green
+- the spatial predictor used as the chroma base
+- a fixed-point coupling coefficient for red
+- a fixed-point coupling coefficient for blue
+
+It reconstructs green first, then predicts red and blue from already-reconstructed green plus chroma base predictors. This is intended to better follow natural-image RGB edge correlation while remaining strictly reversible.
 
 ## Entropy Backend IDs
 
@@ -125,7 +187,8 @@ Decoding proceeds as follows:
 4. Reconstruct transformed bytes from predictor residuals.
 5. Reverse the selected color transform.
 6. Write the tile into the output RGBA image buffer.
-7. Verify the SHA-256 hash of the full raw RGBA output.
+7. Parse any optional tagged preservation sections.
+8. Verify the SHA-256 hash of the full raw RGBA output.
 
 ## Verification Process
 
