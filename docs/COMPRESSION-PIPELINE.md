@@ -98,8 +98,12 @@ Implemented backends:
 
 - Raw residual stream
 - Zstd residual stream
+- Folded residual stream
+- Zstd over folded residual stream
+- Zstd over channel-separated residual streams
+- Zstd over folded, channel-separated residual streams
 
-For bytewise transformed residual streams, every tile tries all implemented entropy backends. For the structured exact plane transform, the encoder stores its exact transform payload through the same raw-vs-Zstd choice and keeps the smaller exact representation once tile metadata is included.
+For bytewise transformed residual streams, every tile tries all implemented entropy backends. The folded residual variants are exact reversible remaps of modulo-256 residual bytes that cluster small signed errors closer together before optional compression. The channel-separated variants preserve any adaptive predictor-map prefix, split the remaining residuals into exact per-channel streams, optionally fold those channel streams, and then compress them independently. For the structured exact plane transform, the encoder stores its exact transform payload through the raw-vs-Zstd choice only, because residual-specific backends are defined for predictor residual streams rather than arbitrary transform payload bytes.
 
 ## Tile Strategy Search
 

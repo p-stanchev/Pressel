@@ -106,6 +106,14 @@ Implemented in v1:
 
 - `0`: Raw residual stream
 - `1`: Zstd-compressed residual or special-transform payload stream
+- `2`: Folded residual stream
+- `3`: Zstd-compressed folded residual stream
+- `4`: Zstd-compressed channel-separated residual stream
+- `5`: Zstd-compressed folded channel-separated residual stream
+
+Backends `2` and `3` are only valid for predictor residual streams. They apply an exact reversible residual folding map that brings small signed prediction errors closer together in byte space before optional compression. This is intended to help natural-image residual distributions remain more compressible without changing any decoded pixel values.
+
+Backends `4` and `5` are also valid only for predictor residual streams. They split residual bytes into exact per-channel streams and compress those streams separately after preserving any adaptive predictor-map bytes. Backend `5` also applies the reversible residual folding map to each channel stream before compression.
 
 ## Decoding Process
 

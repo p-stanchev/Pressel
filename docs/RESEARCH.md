@@ -93,7 +93,7 @@ This workflow is intentionally strict. Pressel does not accept visually-lossless
 
 ## Current Scope
 
-The current `v0.4.0` research prototype focuses on:
+The current `v0.5.0` research prototype focuses on:
 
 - `.prsl` v1 container design
 - strict RGBA verification
@@ -102,7 +102,7 @@ The current `v0.4.0` research prototype focuses on:
 - adaptive whole-image tile-size search
 - structured exact plane modeling for low-cardinality and patterned channels
 - adaptive per-block predictor selection
-- raw and Zstd-backed exact payload search
+- raw, Zstd, folded-residual, and channel-separated exact payload search
 - optional multi-core tile encoding for long-running experiments
 - benchmark generation through `bench.csv`
 - safer decode validation and CI-backed testing

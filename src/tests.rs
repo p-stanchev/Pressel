@@ -1,6 +1,8 @@
 use crate::decode::decode_prsl_bytes;
 use crate::encode::encode_rgba_to_prsl_bytes;
-use crate::entropy::{decode_payload, encode_payload};
+use crate::entropy::{
+    decode_payload, decode_residual_payload, encode_payload, encode_residual_payload,
+};
 use crate::format::{CHANNELS_RGBA8, DEFAULT_TILE_SIZE, MAGIC_BYTES};
 use crate::predict::{PREDICTOR_COUNT, decode_residuals, encode_residuals, expected_residual_len};
 use crate::transform::{
@@ -146,6 +148,60 @@ fn zstd_entropy_roundtrip() {
     let encoded = encode_payload(1, &bytes).unwrap();
     let decoded = decode_payload(1, &encoded, bytes.len()).unwrap();
     assert_eq!(decoded, bytes);
+}
+
+#[test]
+fn folded_raw_entropy_roundtrip() {
+    let bytes = gradient(17, 9);
+    let encoded = encode_payload(2, &bytes).unwrap();
+    let decoded = decode_payload(2, &encoded, bytes.len()).unwrap();
+    assert_eq!(decoded, bytes);
+}
+
+#[test]
+fn folded_zstd_entropy_roundtrip() {
+    let bytes = gradient(17, 9);
+    let encoded = encode_payload(3, &bytes).unwrap();
+    let decoded = decode_payload(3, &encoded, bytes.len()).unwrap();
+    assert_eq!(decoded, bytes);
+}
+
+#[test]
+fn channel_split_entropy_roundtrip() {
+    let bytes = gradient(17, 9);
+    let encoded = encode_residual_payload(4, &bytes, 17, 9, 0).unwrap();
+    let decoded = decode_residual_payload(4, &encoded, 17, 9, 0).unwrap();
+    assert_eq!(decoded, bytes);
+}
+
+#[test]
+fn folded_channel_split_entropy_roundtrip() {
+    let bytes = gradient(17, 9);
+    let encoded = encode_residual_payload(5, &bytes, 17, 9, 0).unwrap();
+    let decoded = decode_residual_payload(5, &encoded, 17, 9, 0).unwrap();
+    assert_eq!(decoded, bytes);
+}
+
+#[test]
+fn adaptive_channel_split_entropy_roundtrip() {
+    let transformed = gradient(19, 13);
+    let residuals = encode_residuals(&transformed, 19, 13, 6).unwrap();
+    let encoded = encode_residual_payload(4, &residuals, 19, 13, 6).unwrap();
+    let decoded = decode_residual_payload(4, &encoded, 19, 13, 6).unwrap();
+    assert_eq!(decoded, residuals);
+    let reconstructed = decode_residuals(&decoded, 19, 13, 6).unwrap();
+    assert_eq!(reconstructed, transformed);
+}
+
+#[test]
+fn adaptive_folded_channel_split_entropy_roundtrip() {
+    let transformed = gradient(19, 13);
+    let residuals = encode_residuals(&transformed, 19, 13, 6).unwrap();
+    let encoded = encode_residual_payload(5, &residuals, 19, 13, 6).unwrap();
+    let decoded = decode_residual_payload(5, &encoded, 19, 13, 6).unwrap();
+    assert_eq!(decoded, residuals);
+    let reconstructed = decode_residuals(&decoded, 19, 13, 6).unwrap();
+    assert_eq!(reconstructed, transformed);
 }
 
 #[test]

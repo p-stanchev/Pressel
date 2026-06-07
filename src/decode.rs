@@ -1,8 +1,8 @@
-use crate::entropy::decode_payload;
+use crate::entropy::decode_residual_payload;
 use crate::format::{
     CHANNELS_RGBA8, MAX_RGBA_BYTES, PresselFile, TileHeader, rgba_byte_len_u64, rgba_sha256,
 };
-use crate::predict::{decode_residuals, expected_residual_len};
+use crate::predict::decode_residuals;
 use crate::tiles::{TileBounds, write_tile_rgba};
 use crate::transform::{decode_special_transform, is_special_transform, reverse_transform};
 use anyhow::{Context, Result, bail};
@@ -97,8 +97,13 @@ fn decode_tile(header: &TileHeader, payload: &[u8]) -> Result<Vec<u8>> {
             header.height,
         );
     }
-    let expected_len = expected_residual_len(header.width, header.height, header.predictor_id)?;
-    let residuals = decode_payload(header.entropy_backend_id, payload, expected_len)?;
+    let residuals = decode_residual_payload(
+        header.entropy_backend_id,
+        payload,
+        header.width,
+        header.height,
+        header.predictor_id,
+    )?;
     let transformed =
         decode_residuals(&residuals, header.width, header.height, header.predictor_id)?;
     reverse_transform(header.transform_id, &transformed)

@@ -1,4 +1,4 @@
-use crate::entropy::{ENTROPY_BACKEND_COUNT, encode_payload};
+use crate::entropy::{ENTROPY_BACKEND_COUNT, encode_payload, encode_residual_payload};
 use crate::format::{
     CHANNELS_RGBA8, DEFAULT_TILE_SIZE, EncodedTile, PresselFile, PresselHeader, TILE_METADATA_SIZE,
     TileHeader, rgba_sha256,
@@ -162,7 +162,8 @@ fn encode_tile(tile: TileBounds, tile_rgba: &[u8]) -> Result<EncodedTile> {
         if is_special_transform(transform_id) {
             let raw_payload =
                 encode_special_transform(transform_id, tile_rgba, tile.width, tile.height)?;
-            for entropy_backend_id in 0..ENTROPY_BACKEND_COUNT {
+            // Folded residual backends are only valid for predictor residual streams.
+            for entropy_backend_id in 0..2 {
                 let payload = encode_payload(entropy_backend_id, &raw_payload)?;
                 let total_len = TILE_METADATA_SIZE + payload.len();
                 if total_len < best_total_len {
@@ -188,7 +189,13 @@ fn encode_tile(tile: TileBounds, tile_rgba: &[u8]) -> Result<EncodedTile> {
         for predictor_id in 0..PREDICTOR_COUNT {
             let residuals = encode_residuals(&transformed, tile.width, tile.height, predictor_id)?;
             for entropy_backend_id in 0..ENTROPY_BACKEND_COUNT {
-                let payload = encode_payload(entropy_backend_id, &residuals)?;
+                let payload = encode_residual_payload(
+                    entropy_backend_id,
+                    &residuals,
+                    tile.width,
+                    tile.height,
+                    predictor_id,
+                )?;
                 let total_len = TILE_METADATA_SIZE + payload.len();
                 if total_len < best_total_len {
                     best_total_len = total_len;
