@@ -547,11 +547,10 @@ fn weighted_gradient(left: u8, top: u8, top_left: u8, top_right: u8) -> u8 {
     let left_weight = u32::from(257_u16.saturating_sub(left_support.min(256)));
     let top_weight = u32::from(257_u16.saturating_sub(top_support.min(256)));
     let denom = left_weight + top_weight;
-    let blended = if denom == 0 {
-        ((u16::from(left) + u16::from(top)) / 2) as u8
-    } else {
-        ((u32::from(left) * left_weight + u32::from(top) * top_weight + denom / 2) / denom) as u8
-    };
+    let blended = (u32::from(left) * left_weight + u32::from(top) * top_weight + denom / 2)
+        .checked_div(denom)
+        .map(|value| value as u8)
+        .unwrap_or_else(|| ((u16::from(left) + u16::from(top)) / 2) as u8);
     ((u16::from(blended) + u16::from(gradient)) / 2) as u8
 }
 

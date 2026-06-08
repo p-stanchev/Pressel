@@ -327,7 +327,7 @@ fn qoi_seed_colors(rgba: &[u8]) -> Vec<[u8; 4]> {
             counts.push((color, 1));
         }
     }
-    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    counts.sort_by_key(|entry| std::cmp::Reverse(entry.1));
     counts
         .into_iter()
         .take(QOI_MAX_SEED_COLORS)
