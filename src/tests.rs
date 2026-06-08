@@ -44,6 +44,23 @@ fn checkerboard(width: u32, height: u32) -> Vec<u8> {
     out
 }
 
+fn repeated_rgba_pattern(width: u32, height: u32) -> Vec<u8> {
+    let palette = [
+        [0, 0, 0, 0],
+        [255, 255, 255, 255],
+        [10, 200, 30, 255],
+        [10, 200, 30, 128],
+        [240, 50, 10, 255],
+    ];
+    let mut out = Vec::with_capacity(width as usize * height as usize * 4);
+    for y in 0..height {
+        for x in 0..width {
+            out.extend_from_slice(&palette[((x / 3 + y / 2) as usize) % palette.len()]);
+        }
+    }
+    out
+}
+
 fn gradient(width: u32, height: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity(width as usize * height as usize * 4);
     for y in 0..height {
@@ -111,6 +128,8 @@ fn every_transform_roundtrip() {
     for transform_id in 0..TRANSFORM_COUNT {
         let rgba = if transform_id == 5 {
             checkerboard(9, 7)
+        } else if transform_id == 7 {
+            repeated_rgba_pattern(9, 7)
         } else {
             gradient(9, 7)
         };
@@ -185,6 +204,14 @@ fn context_split_folded_entropy_roundtrip() {
     let bytes = gradient(17, 9);
     let encoded = encode_residual_payload(7, &bytes, 17, 9, 0).unwrap();
     let decoded = decode_residual_payload(7, &encoded, 17, 9, 0).unwrap();
+    assert_eq!(decoded, bytes);
+}
+
+#[test]
+fn context_rans_folded_entropy_roundtrip() {
+    let bytes = gradient(17, 9);
+    let encoded = encode_residual_payload(8, &bytes, 17, 9, 0).unwrap();
+    let decoded = decode_residual_payload(8, &encoded, 17, 9, 0).unwrap();
     assert_eq!(decoded, bytes);
 }
 

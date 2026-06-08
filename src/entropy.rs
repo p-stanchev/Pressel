@@ -5,16 +5,20 @@ use constriction::stream::{
 };
 use std::io::Cursor;
 
-pub const ENTROPY_BACKEND_COUNT: u8 = 8;
+pub const ENTROPY_BACKEND_COUNT: u8 = 9;
 const CHANNEL_SPLIT_HEADER_U32S: usize = 5;
 const CHANNEL_SPLIT_HEADER_LEN: usize = CHANNEL_SPLIT_HEADER_U32S * 4;
 const CONTEXT_STREAM_COUNT: usize = 16;
 const CONTEXT_SPLIT_HEADER_U32S: usize = 1 + CONTEXT_STREAM_COUNT;
 const CONTEXT_SPLIT_HEADER_LEN: usize = CONTEXT_SPLIT_HEADER_U32S * 4;
+const CONTEXT_RANS_HEADER_U32S: usize = 1 + CONTEXT_STREAM_COUNT + CONTEXT_STREAM_COUNT;
+const CONTEXT_RANS_HEADER_LEN: usize = CONTEXT_RANS_HEADER_U32S * 4;
 const RANS_SCALE_BITS: u32 = 12;
 const RANS_TOTAL: u32 = 1 << RANS_SCALE_BITS;
 const RANS_FREQ_TABLE_LEN: usize = 256 * 2;
 const RANS_WORD_COUNT_LEN: usize = 4;
+const SPARSE_RANS_COUNT_LEN: usize = 2;
+const SPARSE_RANS_ENTRY_LEN: usize = 3;
 
 pub fn encode_payload(backend_id: u8, residuals: &[u8]) -> Result<Vec<u8>> {
     match backend_id {
@@ -60,6 +64,7 @@ pub fn encode_residual_payload(
         4 => encode_channel_split_payload(residuals, width, height, predictor_id, false),
         5 => encode_channel_split_payload(residuals, width, height, predictor_id, true),
         7 => encode_context_split_payload(residuals, width, height, predictor_id),
+        8 => encode_context_rans_payload(residuals, width, height, predictor_id),
         _ => bail!("unsupported entropy backend id: {backend_id}"),
     }
 }
@@ -77,6 +82,7 @@ pub fn decode_residual_payload(
         4 => decode_channel_split_payload(payload, width, height, predictor_id, false),
         5 => decode_channel_split_payload(payload, width, height, predictor_id, true),
         7 => decode_context_split_payload(payload, width, height, predictor_id),
+        8 => decode_context_rans_payload(payload, width, height, predictor_id),
         _ => bail!("unsupported entropy backend id: {backend_id}"),
     }
 }
@@ -377,9 +383,120 @@ fn decode_context_split_payload(
     Ok(out)
 }
 
+fn encode_context_rans_payload(
+    residuals: &[u8],
+    width: u16,
+    height: u16,
+    predictor_id: u8,
+) -> Result<Vec<u8>> {
+    let prefix_len = residual_prefix_len(width, height, predictor_id)?;
+    let prefix_bytes = &residuals[..prefix_len];
+    let body = &residuals[prefix_len..];
+    if !body.len().is_multiple_of(4) {
+        bail!("context-rANS residual body length must be divisible by 4");
+    }
+
+    let prefix_payload = zstd::stream::encode_all(Cursor::new(prefix_bytes), 9)?;
+    let folded = fold_residuals(body);
+    let streams = split_folded_context_streams(&folded, usize::from(width))?;
+    let context_payloads = streams
+        .iter()
+        .map(|stream| encode_sparse_rans_folded_bytes(stream))
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut out = Vec::with_capacity(
+        CONTEXT_RANS_HEADER_LEN
+            + prefix_payload.len()
+            + context_payloads.iter().map(Vec::len).sum::<usize>(),
+    );
+    out.extend_from_slice(&(prefix_payload.len() as u32).to_le_bytes());
+    for payload in &context_payloads {
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    }
+    for stream in &streams {
+        out.extend_from_slice(&(stream.len() as u32).to_le_bytes());
+    }
+    out.extend_from_slice(&prefix_payload);
+    for payload in &context_payloads {
+        out.extend_from_slice(payload);
+    }
+    Ok(out)
+}
+
+fn decode_context_rans_payload(
+    payload: &[u8],
+    width: u16,
+    height: u16,
+    predictor_id: u8,
+) -> Result<Vec<u8>> {
+    let expected_len = expected_residual_len(width, height, predictor_id)?;
+    if payload.len() < CONTEXT_RANS_HEADER_LEN {
+        bail!("context-rANS payload too short");
+    }
+    let header = read_context_rans_u32s(payload)?;
+    let lengths = &header[..CONTEXT_STREAM_COUNT + 1];
+    let counts = &header[CONTEXT_STREAM_COUNT + 1..];
+    let mut cursor = CONTEXT_RANS_HEADER_LEN;
+    let mut segments = Vec::with_capacity(CONTEXT_STREAM_COUNT + 1);
+    for &len_u32 in lengths {
+        let len = usize::try_from(len_u32).context("context-rANS segment length exceeds usize")?;
+        let end = cursor
+            .checked_add(len)
+            .context("context-rANS payload length overflow")?;
+        if end > payload.len() {
+            bail!("context-rANS payload truncated");
+        }
+        segments.push(&payload[cursor..end]);
+        cursor = end;
+    }
+    if cursor != payload.len() {
+        bail!("context-rANS payload has trailing bytes");
+    }
+
+    let prefix_len = residual_prefix_len(width, height, predictor_id)?;
+    let prefix_bytes = zstd::stream::decode_all(Cursor::new(segments[0]))?;
+    if prefix_bytes.len() != prefix_len {
+        bail!(
+            "context-rANS prefix length mismatch: expected {}, got {}",
+            prefix_len,
+            prefix_bytes.len()
+        );
+    }
+    let body_len = expected_len - prefix_len;
+    if body_len % 4 != 0 {
+        bail!("context-rANS expected body length must be divisible by 4");
+    }
+
+    let mut streams = std::array::from_fn::<_, CONTEXT_STREAM_COUNT, _>(|_| Vec::new());
+    for context in 0..CONTEXT_STREAM_COUNT {
+        streams[context] = decode_sparse_rans_folded_bytes(
+            segments[context + 1],
+            usize::try_from(counts[context])
+                .context("context-rANS stream symbol count exceeds usize")?,
+        )?;
+    }
+    let folded_body = merge_folded_context_streams(&streams, body_len, usize::from(width))?;
+    let unfolded_body = unfold_residuals(&folded_body);
+
+    let mut out = prefix_bytes;
+    out.extend_from_slice(&unfolded_body);
+    if out.len() != expected_len {
+        bail!(
+            "context-rANS decode length mismatch: expected {}, got {}",
+            expected_len,
+            out.len()
+        );
+    }
+    Ok(out)
+}
+
 fn encode_rans_folded_payload(residuals: &[u8]) -> Result<Vec<u8>> {
     let folded = fold_residuals(residuals);
-    let freqs = normalized_rans_freqs(&folded);
+    encode_dense_rans_folded_bytes(&folded)
+}
+
+fn encode_dense_rans_folded_bytes(folded: &[u8]) -> Result<Vec<u8>> {
+    let freqs = normalized_rans_freqs(folded);
     let model = rans_model_from_freqs(&freqs)?;
     let mut coder = DefaultAnsCoder::new();
     let symbols = folded.iter().copied().map(usize::from);
@@ -388,7 +505,8 @@ fn encode_rans_folded_payload(residuals: &[u8]) -> Result<Vec<u8>> {
         .map_err(|err| anyhow::anyhow!("rANS encode failed: {err}"))?;
     let compressed: Vec<u32> = coder.get_compressed()?.to_vec();
 
-    let mut out = Vec::with_capacity(RANS_FREQ_TABLE_LEN + RANS_WORD_COUNT_LEN + compressed.len() * 4);
+    let mut out =
+        Vec::with_capacity(RANS_FREQ_TABLE_LEN + RANS_WORD_COUNT_LEN + compressed.len() * 4);
     for &freq in &freqs {
         out.extend_from_slice(&freq.to_le_bytes());
     }
@@ -400,6 +518,11 @@ fn encode_rans_folded_payload(residuals: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn decode_rans_folded_payload(payload: &[u8], expected_len: usize) -> Result<Vec<u8>> {
+    let folded = decode_dense_rans_folded_bytes(payload, expected_len)?;
+    Ok(unfold_residuals(&folded))
+}
+
+fn decode_dense_rans_folded_bytes(payload: &[u8], expected_len: usize) -> Result<Vec<u8>> {
     if payload.len() < RANS_FREQ_TABLE_LEN + RANS_WORD_COUNT_LEN {
         bail!("rANS payload too short");
     }
@@ -431,14 +554,128 @@ fn decode_rans_folded_payload(payload: &[u8], expected_len: usize) -> Result<Vec
                 .expect("fixed 4-byte rANS word"),
         ));
     }
-    let mut coder =
-        DefaultAnsCoder::from_compressed(compressed).map_err(|_| anyhow::anyhow!("rANS decode init failed"))?;
+    let mut coder = DefaultAnsCoder::from_compressed(compressed)
+        .map_err(|_| anyhow::anyhow!("rANS decode init failed"))?;
     let folded = coder
         .decode_iid_symbols(expected_len, &model)
         .map(|symbol| symbol.map(|value| value as u8))
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|err| anyhow::anyhow!("rANS decode failed: {err}"))?;
-    Ok(unfold_residuals(&folded))
+    Ok(folded)
+}
+
+fn encode_sparse_rans_folded_bytes(folded: &[u8]) -> Result<Vec<u8>> {
+    if folded.is_empty() {
+        return Ok(Vec::new());
+    }
+    let freqs = normalized_rans_freqs(folded);
+    let model = rans_model_from_freqs(&freqs)?;
+    let mut coder = DefaultAnsCoder::new();
+    let symbols = folded.iter().copied().map(usize::from);
+    coder
+        .encode_iid_symbols_reverse(symbols, &model)
+        .map_err(|err| anyhow::anyhow!("context rANS encode failed: {err}"))?;
+    let compressed: Vec<u32> = coder.get_compressed()?.to_vec();
+
+    let nonzero = freqs
+        .iter()
+        .enumerate()
+        .filter_map(|(symbol, &freq)| (freq > 0).then_some((symbol as u8, freq)))
+        .collect::<Vec<_>>();
+    let nonzero_len = u16::try_from(nonzero.len()).context("sparse rANS symbol count overflow")?;
+
+    let mut out = Vec::with_capacity(
+        SPARSE_RANS_COUNT_LEN
+            + nonzero.len() * SPARSE_RANS_ENTRY_LEN
+            + RANS_WORD_COUNT_LEN
+            + compressed.len() * 4,
+    );
+    out.extend_from_slice(&nonzero_len.to_le_bytes());
+    for (symbol, freq) in nonzero {
+        out.push(symbol);
+        out.extend_from_slice(&freq.to_le_bytes());
+    }
+    out.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+    for word in compressed {
+        out.extend_from_slice(&word.to_le_bytes());
+    }
+    Ok(out)
+}
+
+fn decode_sparse_rans_folded_bytes(payload: &[u8], expected_len: usize) -> Result<Vec<u8>> {
+    if expected_len == 0 {
+        if !payload.is_empty() {
+            bail!("empty context stream should not have payload");
+        }
+        return Ok(Vec::new());
+    }
+    if payload.len() < SPARSE_RANS_COUNT_LEN + RANS_WORD_COUNT_LEN {
+        bail!("sparse rANS payload too short");
+    }
+    let symbol_count = u16::from_le_bytes(
+        payload[..SPARSE_RANS_COUNT_LEN]
+            .try_into()
+            .expect("fixed 2-byte sparse rANS count"),
+    ) as usize;
+    let table_len = symbol_count
+        .checked_mul(SPARSE_RANS_ENTRY_LEN)
+        .context("sparse rANS table length overflow")?;
+    let words_offset = SPARSE_RANS_COUNT_LEN
+        .checked_add(table_len)
+        .context("sparse rANS words offset overflow")?;
+    if payload.len() < words_offset + RANS_WORD_COUNT_LEN {
+        bail!("sparse rANS payload truncated before word count");
+    }
+
+    let mut freqs = [0_u16; 256];
+    let mut cursor = SPARSE_RANS_COUNT_LEN;
+    for _ in 0..symbol_count {
+        let symbol = payload[cursor];
+        let freq = u16::from_le_bytes(
+            payload[cursor + 1..cursor + 3]
+                .try_into()
+                .expect("fixed 2-byte sparse rANS freq"),
+        );
+        freqs[symbol as usize] = freq;
+        cursor += SPARSE_RANS_ENTRY_LEN;
+    }
+    let total = freqs.iter().map(|&freq| u32::from(freq)).sum::<u32>();
+    if total != RANS_TOTAL {
+        bail!("invalid sparse rANS frequency total: expected {RANS_TOTAL}, got {total}");
+    }
+    let model = rans_model_from_freqs(&freqs)?;
+    let word_count = u32::from_le_bytes(
+        payload[words_offset..words_offset + RANS_WORD_COUNT_LEN]
+            .try_into()
+            .expect("fixed 4-byte sparse rANS word count"),
+    ) as usize;
+    let words_bytes = &payload[words_offset + RANS_WORD_COUNT_LEN..];
+    let expected_bytes = word_count
+        .checked_mul(4)
+        .context("sparse rANS compressed word length overflow")?;
+    if words_bytes.len() != expected_bytes {
+        bail!(
+            "sparse rANS payload word data length mismatch: expected {}, got {}",
+            expected_bytes,
+            words_bytes.len()
+        );
+    }
+    let mut compressed = Vec::with_capacity(word_count);
+    for idx in 0..word_count {
+        let start = idx * 4;
+        compressed.push(u32::from_le_bytes(
+            words_bytes[start..start + 4]
+                .try_into()
+                .expect("fixed 4-byte sparse rANS word"),
+        ));
+    }
+    let mut coder = DefaultAnsCoder::from_compressed(compressed)
+        .map_err(|_| anyhow::anyhow!("sparse rANS decode init failed"))?;
+    coder
+        .decode_iid_symbols(expected_len, &model)
+        .map(|symbol| symbol.map(|value| value as u8))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|err| anyhow::anyhow!("sparse rANS decode failed: {err}"))
 }
 
 fn normalized_rans_freqs(bytes: &[u8]) -> [u16; 256] {
@@ -511,9 +748,7 @@ fn read_rans_freqs(payload: &[u8]) -> Result<[u16; 256]> {
     Ok(freqs)
 }
 
-fn rans_model_from_freqs(
-    freqs: &[u16; 256],
-) -> Result<DefaultContiguousCategoricalEntropyModel> {
+fn rans_model_from_freqs(freqs: &[u16; 256]) -> Result<DefaultContiguousCategoricalEntropyModel> {
     let total = freqs.iter().map(|&freq| u32::from(freq)).sum::<u32>();
     if total == 0 {
         bail!("cannot build rANS model from an empty frequency table");
@@ -574,11 +809,7 @@ fn folded_context_id(decoded_folded: &[u8], width: usize, idx: usize) -> usize {
     let x = pixel_index % width;
     let y = pixel_index / width;
 
-    let left = if x > 0 {
-        decoded_folded[idx - 4]
-    } else {
-        0
-    };
+    let left = if x > 0 { decoded_folded[idx - 4] } else { 0 };
     let top = if y > 0 {
         decoded_folded[idx - (width * 4)]
     } else {
@@ -607,6 +838,20 @@ fn read_context_u32_lengths(payload: &[u8]) -> Result<[u32; CONTEXT_SPLIT_HEADER
             payload[start..end]
                 .try_into()
                 .expect("fixed 4-byte slice for context-split header"),
+        );
+    }
+    Ok(lengths)
+}
+
+fn read_context_rans_u32s(payload: &[u8]) -> Result<[u32; CONTEXT_RANS_HEADER_U32S]> {
+    let mut lengths = [0_u32; CONTEXT_RANS_HEADER_U32S];
+    for (idx, slot) in lengths.iter_mut().enumerate() {
+        let start = idx * 4;
+        let end = start + 4;
+        *slot = u32::from_le_bytes(
+            payload[start..end]
+                .try_into()
+                .expect("fixed 4-byte slice for context-rANS header"),
         );
     }
     Ok(lengths)

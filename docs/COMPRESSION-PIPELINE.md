@@ -73,6 +73,12 @@ Transform `6` splits the tile into separate `R`, `G`, `B`, and `A` planes and le
 
 This transform is aimed at low-cardinality, patterned, or nearly affine channels that do not compress well when forced through one bytewise tile model.
 
+### QOI-Style Pixel-Cache Transform
+
+Transform `7` is a variable-length exact tile transform built around a 64-entry RGBA cache hash, short runs, small RGB deltas, luma-like deltas, and raw RGB/RGBA escape opcodes.
+
+It is not QOI-compatible at the file level. Instead, it gives Pressel a cache-oriented exact tile representation that can compete with the other reversible tile strategies during search.
+
 ## Predictors
 
 Pressel v1 currently tries these predictors for every tile:
@@ -113,8 +119,9 @@ Implemented backends:
 - Zstd over folded, channel-separated residual streams
 - Static rANS over folded residual streams
 - Zstd over context-adaptive folded residual streams
+- Context-adaptive folded rANS residual streams
 
-For bytewise transformed residual streams, every tile tries all implemented entropy backends. The folded residual variants are exact reversible remaps of modulo-256 residual bytes that cluster small signed errors closer together before optional compression. The channel-separated variants preserve any adaptive predictor-map prefix, split the remaining residuals into exact per-channel streams, optionally fold those channel streams, and then compress them independently. The static rANS backend uses a stored normalized frequency table over folded residual symbols, which is a first step toward a more custom entropy path than generic Zstd. The context-adaptive folded backend preserves prefix bytes, folds the residual body, bins symbols by deterministic channel-and-activity contexts, and compresses those context streams independently. For the structured exact plane transform, the encoder stores its exact transform payload through the raw-vs-Zstd choice only, because residual-specific backends are defined for predictor residual streams rather than arbitrary transform payload bytes.
+For bytewise transformed residual streams, every tile tries all implemented entropy backends. The folded residual variants are exact reversible remaps of modulo-256 residual bytes that cluster small signed errors closer together before optional compression. The channel-separated variants preserve any adaptive predictor-map prefix, split the remaining residuals into exact per-channel streams, optionally fold those channel streams, and then compress them independently. The static rANS backend uses a stored normalized frequency table over folded residual symbols, which is a first step toward a more custom entropy path than generic Zstd. The context-adaptive folded backends preserve prefix bytes, fold the residual body, bin symbols by deterministic channel-and-activity contexts, and then either compress those context streams independently with Zstd or encode them through sparse-table rANS payloads. For the structured exact plane transform and QOI-style pixel-cache transform, the encoder stores exact transform payloads through the raw-vs-Zstd choice only, because residual-specific backends are defined for predictor residual streams rather than arbitrary transform payload bytes.
 
 ## Tile Strategy Search
 
@@ -145,6 +152,6 @@ When exporting PNG from `.prsl`, Pressel regenerates critical PNG structure from
 
 Planned research directions include:
 
-- deeper context-adaptive rANS / arithmetic entropy coding
-- QOI-style pixel cache
+- deeper arithmetic-coded context modeling beyond the current context-adaptive folded rANS backend
+- stronger cache-aware or hybrid pixel-cache transforms beyond the current QOI-style tile mode
 - JPEG XL-style weighted predictor

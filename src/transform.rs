@@ -1,7 +1,8 @@
 use anyhow::{Result, bail};
 
-pub const TRANSFORM_COUNT: u8 = 7;
+pub const TRANSFORM_COUNT: u8 = 8;
 pub const STRUCTURED_PLANE_TRANSFORM_ID: u8 = 6;
+pub const QOI_CACHE_TRANSFORM_ID: u8 = 7;
 const PLANE_MODE_RAW: u8 = 0;
 const PLANE_MODE_CONSTANT: u8 = 1;
 const PLANE_MODE_GLOBAL_AFFINE_SPARSE: u8 = 2;
@@ -42,7 +43,15 @@ pub fn reverse_transform(transform_id: u8, transformed: &[u8]) -> Result<Vec<u8>
 }
 
 pub fn transform_ids_for_tile(rgba: &[u8]) -> Vec<u8> {
-    let mut ids = vec![0, 1, 2, 3, 4, STRUCTURED_PLANE_TRANSFORM_ID];
+    let mut ids = vec![
+        0,
+        1,
+        2,
+        3,
+        4,
+        STRUCTURED_PLANE_TRANSFORM_ID,
+        QOI_CACHE_TRANSFORM_ID,
+    ];
     if palette_index_transform_possible(rgba) {
         ids.push(5);
     }
@@ -50,7 +59,10 @@ pub fn transform_ids_for_tile(rgba: &[u8]) -> Vec<u8> {
 }
 
 pub fn is_special_transform(transform_id: u8) -> bool {
-    transform_id == STRUCTURED_PLANE_TRANSFORM_ID
+    matches!(
+        transform_id,
+        STRUCTURED_PLANE_TRANSFORM_ID | QOI_CACHE_TRANSFORM_ID
+    )
 }
 
 pub fn encode_special_transform(
@@ -61,6 +73,7 @@ pub fn encode_special_transform(
 ) -> Result<Vec<u8>> {
     match transform_id {
         STRUCTURED_PLANE_TRANSFORM_ID => encode_structured_plane_transform(rgba, width, height),
+        QOI_CACHE_TRANSFORM_ID => encode_qoi_cache_transform(rgba, width, height),
         _ => bail!("unsupported special transform id: {transform_id}"),
     }
 }
@@ -73,8 +86,202 @@ pub fn decode_special_transform(
 ) -> Result<Vec<u8>> {
     match transform_id {
         STRUCTURED_PLANE_TRANSFORM_ID => decode_structured_plane_transform(payload, width, height),
+        QOI_CACHE_TRANSFORM_ID => decode_qoi_cache_transform(payload, width, height),
         _ => bail!("unsupported special transform id: {transform_id}"),
     }
+}
+
+const QOI_OP_RGB: u8 = 0xFE;
+const QOI_OP_RGBA: u8 = 0xFF;
+const QOI_MASK_2: u8 = 0xC0;
+const QOI_OP_INDEX: u8 = 0x00;
+const QOI_OP_DIFF: u8 = 0x40;
+const QOI_OP_LUMA: u8 = 0x80;
+const QOI_OP_RUN: u8 = 0xC0;
+
+fn encode_qoi_cache_transform(rgba: &[u8], width: u16, height: u16) -> Result<Vec<u8>> {
+    let pixel_count = usize::from(width)
+        .checked_mul(usize::from(height))
+        .ok_or_else(|| anyhow::anyhow!("QOI cache pixel count overflow"))?;
+    if rgba.len() != pixel_count * 4 {
+        bail!("QOI cache transform input length mismatch");
+    }
+
+    let mut index = [[0_u8; 4]; 64];
+    let mut prev = [0_u8, 0_u8, 0_u8, 255_u8];
+    let mut run = 0_u8;
+    let mut out = Vec::with_capacity(rgba.len());
+
+    for px in rgba.chunks_exact(4) {
+        let current = [px[0], px[1], px[2], px[3]];
+        if current == prev {
+            run = run.saturating_add(1);
+            if run == 62 {
+                out.push(QOI_OP_RUN | (run - 1));
+                run = 0;
+            }
+            continue;
+        }
+
+        if run > 0 {
+            out.push(QOI_OP_RUN | (run - 1));
+            run = 0;
+        }
+
+        let cache_index = qoi_hash(current);
+        if index[cache_index] == current {
+            out.push(QOI_OP_INDEX | cache_index as u8);
+            prev = current;
+            continue;
+        }
+
+        index[cache_index] = current;
+        if current[3] == prev[3] {
+            let dr = i16::from(current[0]) - i16::from(prev[0]);
+            let dg = i16::from(current[1]) - i16::from(prev[1]);
+            let db = i16::from(current[2]) - i16::from(prev[2]);
+            if (-2..=1).contains(&dr) && (-2..=1).contains(&dg) && (-2..=1).contains(&db) {
+                out.push(
+                    QOI_OP_DIFF | ((dr + 2) as u8) << 4 | ((dg + 2) as u8) << 2 | (db + 2) as u8,
+                );
+            } else {
+                let dr_dg = dr - dg;
+                let db_dg = db - dg;
+                if (-32..=31).contains(&dg)
+                    && (-8..=7).contains(&dr_dg)
+                    && (-8..=7).contains(&db_dg)
+                {
+                    out.push(QOI_OP_LUMA | (dg + 32) as u8);
+                    out.push(((dr_dg + 8) as u8) << 4 | (db_dg + 8) as u8);
+                } else {
+                    out.push(QOI_OP_RGB);
+                    out.extend_from_slice(&current[..3]);
+                }
+            }
+        } else {
+            out.push(QOI_OP_RGBA);
+            out.extend_from_slice(&current);
+        }
+        prev = current;
+    }
+
+    if run > 0 {
+        out.push(QOI_OP_RUN | (run - 1));
+    }
+
+    Ok(out)
+}
+
+fn decode_qoi_cache_transform(payload: &[u8], width: u16, height: u16) -> Result<Vec<u8>> {
+    let pixel_count = usize::from(width)
+        .checked_mul(usize::from(height))
+        .ok_or_else(|| anyhow::anyhow!("QOI cache pixel count overflow"))?;
+    let mut index = [[0_u8; 4]; 64];
+    let mut prev = [0_u8, 0_u8, 0_u8, 255_u8];
+    let mut out = Vec::with_capacity(pixel_count * 4);
+    let mut cursor = 0_usize;
+    let mut emitted = 0_usize;
+
+    while emitted < pixel_count {
+        if cursor >= payload.len() {
+            bail!("QOI cache payload truncated");
+        }
+        let op = payload[cursor];
+        cursor += 1;
+
+        let current = match op {
+            QOI_OP_RGB => {
+                if cursor + 3 > payload.len() {
+                    bail!("QOI cache RGB payload truncated");
+                }
+                [
+                    payload[cursor],
+                    payload[cursor + 1],
+                    payload[cursor + 2],
+                    prev[3],
+                ]
+            }
+            QOI_OP_RGBA => {
+                if cursor + 4 > payload.len() {
+                    bail!("QOI cache RGBA payload truncated");
+                }
+                [
+                    payload[cursor],
+                    payload[cursor + 1],
+                    payload[cursor + 2],
+                    payload[cursor + 3],
+                ]
+            }
+            _ => match op & QOI_MASK_2 {
+                QOI_OP_INDEX => index[(op & 0x3F) as usize],
+                QOI_OP_DIFF => {
+                    let dr = ((op >> 4) & 0x03) as i8 - 2;
+                    let dg = ((op >> 2) & 0x03) as i8 - 2;
+                    let db = (op & 0x03) as i8 - 2;
+                    [
+                        prev[0].wrapping_add_signed(dr),
+                        prev[1].wrapping_add_signed(dg),
+                        prev[2].wrapping_add_signed(db),
+                        prev[3],
+                    ]
+                }
+                QOI_OP_LUMA => {
+                    if cursor >= payload.len() {
+                        bail!("QOI cache luma payload truncated");
+                    }
+                    let next = payload[cursor];
+                    cursor += 1;
+                    let dg = (op & 0x3F) as i8 - 32;
+                    let dr_dg = ((next >> 4) & 0x0F) as i8 - 8;
+                    let db_dg = (next & 0x0F) as i8 - 8;
+                    [
+                        prev[0].wrapping_add_signed(dg + dr_dg),
+                        prev[1].wrapping_add_signed(dg),
+                        prev[2].wrapping_add_signed(dg + db_dg),
+                        prev[3],
+                    ]
+                }
+                QOI_OP_RUN => {
+                    let run = usize::from(op & 0x3F) + 1;
+                    let new_len = emitted
+                        .checked_add(run)
+                        .ok_or_else(|| anyhow::anyhow!("QOI cache run overflow"))?;
+                    if new_len > pixel_count {
+                        bail!("QOI cache run exceeds pixel count");
+                    }
+                    for _ in 0..run {
+                        out.extend_from_slice(&prev);
+                    }
+                    emitted = new_len;
+                    continue;
+                }
+                _ => unreachable!(),
+            },
+        };
+
+        if matches!(op, QOI_OP_RGB) {
+            cursor += 3;
+        } else if matches!(op, QOI_OP_RGBA) {
+            cursor += 4;
+        }
+        out.extend_from_slice(&current);
+        prev = current;
+        index[qoi_hash(current)] = current;
+        emitted += 1;
+    }
+
+    if cursor != payload.len() {
+        bail!("QOI cache payload has trailing bytes");
+    }
+    Ok(out)
+}
+
+fn qoi_hash(px: [u8; 4]) -> usize {
+    (usize::from(px[0]) * 3
+        + usize::from(px[1]) * 5
+        + usize::from(px[2]) * 7
+        + usize::from(px[3]) * 11)
+        % 64
 }
 
 fn subtract_green(rgba: &[u8]) -> Vec<u8> {

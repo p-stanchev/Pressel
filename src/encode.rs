@@ -28,6 +28,7 @@ const ZSTD_STREAM_OVERHEAD_ESTIMATE: f64 = 24.0;
 const CHANNEL_SPLIT_OVERHEAD_ESTIMATE: f64 = 80.0;
 const RANS_OVERHEAD_ESTIMATE: f64 = (256 * 2 + 4) as f64;
 const CONTEXT_SPLIT_OVERHEAD_ESTIMATE: f64 = 476.0;
+const CONTEXT_RANS_BASE_OVERHEAD_ESTIMATE: f64 = 132.0;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EncodeStats {
@@ -443,8 +444,22 @@ fn estimate_entropy_payload_lengths(
     let context_bits = folded_context_hist
         .iter()
         .map(|context_hist| {
-            let context_total = context_hist.iter().map(|&count| count as usize).sum::<usize>();
+            let context_total = context_hist
+                .iter()
+                .map(|&count| count as usize)
+                .sum::<usize>();
             estimated_histogram_bits(context_hist, context_total)
+        })
+        .sum::<f64>();
+    let context_rans_overhead = folded_context_hist
+        .iter()
+        .map(|context_hist| {
+            let nonzero = context_hist.iter().filter(|&&count| count > 0).count();
+            if nonzero == 0 {
+                0.0
+            } else {
+                2.0 + (nonzero as f64 * 3.0) + 4.0
+            }
         })
         .sum::<f64>();
 
@@ -467,13 +482,17 @@ fn estimate_entropy_payload_lengths(
             5,
             prefix_len as f64 + (folded_channel_bits / 8.0) + CHANNEL_SPLIT_OVERHEAD_ESTIMATE,
         ),
-        (
-            6,
-            (folded_bits / 8.0) + RANS_OVERHEAD_ESTIMATE,
-        ),
+        (6, (folded_bits / 8.0) + RANS_OVERHEAD_ESTIMATE),
         (
             7,
             prefix_len as f64 + (context_bits / 8.0) + CONTEXT_SPLIT_OVERHEAD_ESTIMATE,
+        ),
+        (
+            8,
+            prefix_len as f64
+                + (context_bits / 8.0)
+                + CONTEXT_RANS_BASE_OVERHEAD_ESTIMATE
+                + context_rans_overhead,
         ),
     ])
 }

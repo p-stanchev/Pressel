@@ -181,7 +181,7 @@ When exporting PNG, Pressel regenerates `IHDR`/`IDAT`/`IEND` from the decoded im
 - SHA-256 hash of the original raw RGBA byte stream
 - Optional tagged sections for preserved PNG metadata, ancillary chunks, or the full original source file
 
-Each tile independently tries multiple reversible transform, predictor, and entropy combinations, then stores the smallest exact result. The current search space includes fixed-width bytewise transforms, an exact structured-plane transform, adaptive predictor maps, and raw, Zstd, folded-residual, channel-split, static rANS, and context-adaptive folded residual payload storage. The encoder also searches a small set of whole-image tile sizes and can parallelize tile encoding when `--cores` is greater than `1`.
+Each tile independently tries multiple reversible transform, predictor, and entropy combinations, then stores the smallest exact result. The current search space includes fixed-width bytewise transforms, an exact structured-plane transform, a QOI-style pixel-cache transform, adaptive predictor maps, and raw, Zstd, folded-residual, channel-split, static rANS, context-split, and context-adaptive folded rANS residual payload storage. The encoder also searches a small set of whole-image tile sizes and can parallelize tile encoding when `--cores` is greater than `1`.
 
 When decoding back to PNG, Pressel reconstructs the original RGBA pixels exactly, but it does not attempt to recreate the original PNG file bytes exactly.
 
@@ -289,12 +289,12 @@ Pressel is designed as a research codec, not just a file converter.
 
 ## Version Goal
 
-This project is currently positioned as `v0.7.0`: a more capable research prototype with `encode`, `decode`, `verify`, `compare`, `bench`, and demo-image commands, documentation, strict roundtrip tests, CI, safer decode validation, an expanded reversible transform set, adaptive tile-size search, structured exact plane modeling, residual folding experiments, channel-separated residual coding, static rANS and context-adaptive folded residual experiments, photo-oriented predictor experiments, aggressive exact compression experiments over raw, folded, Zstd-backed, and context-split residual payloads, and optional PNG metadata/chunk/source-file preservation.
+This project is currently positioned as `v0.7.0`: a more capable research prototype with `encode`, `decode`, `verify`, `compare`, `bench`, and demo-image commands, documentation, strict roundtrip tests, CI, safer decode validation, an expanded reversible transform set, adaptive tile-size search, structured exact plane modeling, a QOI-style pixel-cache transform, residual folding experiments, channel-separated residual coding, static rANS and context-adaptive folded rANS residual experiments, photo-oriented predictor experiments, aggressive exact compression experiments over raw, folded, Zstd-backed, context-split, and context-rANS payloads, and optional PNG metadata/chunk/source-file preservation.
 
 ## Roadmap
 
-- deeper context-adaptive rANS / arithmetic entropy coding
-- QOI-style pixel cache mode
+- deeper arithmetic-coded context modeling beyond the current context-adaptive folded rANS path
+- stronger cache-aware or hybrid pixel-cache transforms beyond the current QOI-style tile mode
 - JPEG XL-style weighted predictor
 - per-tile image classifier
 

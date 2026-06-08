@@ -107,6 +107,7 @@ Implemented in v1:
 - `4`: Green average decorrelation
 - `5`: Fixed-width palette/index packed transform for suitable tiles
 - `6`: Structured exact plane transform
+- `7`: QOI-style pixel-cache transform
 
 Subtract-green uses:
 
@@ -136,6 +137,8 @@ The structured exact plane transform splits RGBA into separate planes and lets e
 - block-pulse plane modeling
 
 These submodes are internal to transform `6` and remain strictly lossless because they reconstruct the original plane bytes exactly.
+
+The QOI-style pixel-cache transform is an exact variable-length tile transform that uses a 64-entry RGBA hash cache plus run, index, small-difference, luma-like, RGB, and RGBA opcodes. It is not QOI bitstream-compatible, but it borrows the same exact cache/update idea inside Pressel's tile search.
 
 ## Predictor IDs
 
@@ -178,6 +181,7 @@ Implemented in v1:
 - `5`: Zstd-compressed folded channel-separated residual stream
 - `6`: Static rANS-compressed folded residual stream
 - `7`: Zstd-compressed context-adaptive folded residual stream
+- `8`: Context-adaptive folded rANS residual stream
 
 Backends `2` and `3` are only valid for predictor residual streams. They apply an exact reversible residual folding map that brings small signed prediction errors closer together in byte space before optional compression. This is intended to help natural-image residual distributions remain more compressible without changing any decoded pixel values.
 
@@ -186,6 +190,8 @@ Backends `4` and `5` are also valid only for predictor residual streams. They sp
 Backend `6` is also valid only for predictor residual streams. It folds residual bytes exactly and then encodes them with a static order-0 rANS model reconstructed from the stored normalized frequency table.
 
 Backend `7` is also valid only for predictor residual streams. It preserves any residual prefix bytes, folds the remaining residual body exactly, assigns each folded residual byte to a deterministic context based on channel and local activity, and compresses those context streams independently. The decoder reconstructs the same contexts from already-decoded folded residual neighbors.
+
+Backend `8` is also valid only for predictor residual streams. It uses the same deterministic folded residual contexts as backend `7`, but stores each context stream through a sparse-table static rANS payload instead of Zstd. This is a deeper custom entropy step than the context-split Zstd path while remaining exactly reversible.
 
 ## Decoding Process
 
