@@ -107,7 +107,7 @@ Implemented in v1:
 - `4`: Green average decorrelation
 - `5`: Fixed-width palette/index packed transform for suitable tiles
 - `6`: Structured exact plane transform
-- `7`: QOI-style pixel-cache transform
+- `7`: Seeded QOI-style pixel-cache transform
 
 Subtract-green uses:
 
@@ -138,7 +138,7 @@ The structured exact plane transform splits RGBA into separate planes and lets e
 
 These submodes are internal to transform `6` and remain strictly lossless because they reconstruct the original plane bytes exactly.
 
-The QOI-style pixel-cache transform is an exact variable-length tile transform that uses a 64-entry RGBA hash cache plus run, index, small-difference, luma-like, RGB, and RGBA opcodes. It is not QOI bitstream-compatible, but it borrows the same exact cache/update idea inside Pressel's tile search.
+The seeded QOI-style pixel-cache transform is an exact variable-length tile transform that uses a small seed palette of common tile colors, a 64-entry RGBA hash cache, plus run, index, small-difference, luma-like, RGB, and RGBA opcodes. It is not QOI bitstream-compatible, but it borrows the same exact cache/update idea inside Pressel's tile search while giving repeated tile colors a stronger starting cache state.
 
 ## Predictor IDs
 
@@ -153,6 +153,7 @@ Implemented in v1:
 - `6`: Adaptive 8x8 block predictor map
 - `7`: Edge-guided deterministic predictor
 - `8`: Photo-guided RGB predictor
+- `9`: Weighted gradient predictor
 
 Predictors operate on transformed per-channel bytes. Residuals are encoded modulo 256.
 
@@ -169,6 +170,8 @@ The photo-guided predictor stores a small per-tile prefix inside the residual st
 
 It reconstructs green first, then predicts red and blue from already-reconstructed green plus chroma base predictors. This is intended to better follow natural-image RGB edge correlation while remaining strictly reversible.
 
+The weighted gradient predictor uses only already-known neighbors and blends local left/top support with a clamped gradient estimate. It is inspired by the general direction of JPEG XL-style weighted prediction while remaining a simpler exact bytewise predictor inside Pressel's current pipeline.
+
 ## Entropy Backend IDs
 
 Implemented in v1:
@@ -182,6 +185,7 @@ Implemented in v1:
 - `6`: Static rANS-compressed folded residual stream
 - `7`: Zstd-compressed context-adaptive folded residual stream
 - `8`: Context-adaptive folded rANS residual stream
+- `9`: Context-adaptive folded arithmetic/range residual stream
 
 Backends `2` and `3` are only valid for predictor residual streams. They apply an exact reversible residual folding map that brings small signed prediction errors closer together in byte space before optional compression. This is intended to help natural-image residual distributions remain more compressible without changing any decoded pixel values.
 
@@ -192,6 +196,8 @@ Backend `6` is also valid only for predictor residual streams. It folds residual
 Backend `7` is also valid only for predictor residual streams. It preserves any residual prefix bytes, folds the remaining residual body exactly, assigns each folded residual byte to a deterministic context based on channel and local activity, and compresses those context streams independently. The decoder reconstructs the same contexts from already-decoded folded residual neighbors.
 
 Backend `8` is also valid only for predictor residual streams. It uses the same deterministic folded residual contexts as backend `7`, but stores each context stream through a sparse-table static rANS payload instead of Zstd. This is a deeper custom entropy step than the context-split Zstd path while remaining exactly reversible.
+
+Backend `9` is also valid only for predictor residual streams. It uses the same deterministic folded residual contexts as backends `7` and `8`, but stores each context stream through a sparse-table range-coded payload rather than Zstd or rANS. This is the current arithmetic-coded step in the codec.
 
 ## Decoding Process
 

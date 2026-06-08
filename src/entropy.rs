@@ -1,11 +1,12 @@
 use crate::predict::{expected_residual_len, residual_prefix_len};
 use anyhow::{Context, Result, bail};
 use constriction::stream::{
-    Decode, model::DefaultContiguousCategoricalEntropyModel, stack::DefaultAnsCoder,
+    Decode, Encode, model::DefaultContiguousCategoricalEntropyModel, queue::DefaultRangeDecoder,
+    queue::DefaultRangeEncoder, stack::DefaultAnsCoder,
 };
 use std::io::Cursor;
 
-pub const ENTROPY_BACKEND_COUNT: u8 = 9;
+pub const ENTROPY_BACKEND_COUNT: u8 = 10;
 const CHANNEL_SPLIT_HEADER_U32S: usize = 5;
 const CHANNEL_SPLIT_HEADER_LEN: usize = CHANNEL_SPLIT_HEADER_U32S * 4;
 const CONTEXT_STREAM_COUNT: usize = 16;
@@ -65,6 +66,7 @@ pub fn encode_residual_payload(
         5 => encode_channel_split_payload(residuals, width, height, predictor_id, true),
         7 => encode_context_split_payload(residuals, width, height, predictor_id),
         8 => encode_context_rans_payload(residuals, width, height, predictor_id),
+        9 => encode_context_range_payload(residuals, width, height, predictor_id),
         _ => bail!("unsupported entropy backend id: {backend_id}"),
     }
 }
@@ -83,6 +85,7 @@ pub fn decode_residual_payload(
         5 => decode_channel_split_payload(payload, width, height, predictor_id, true),
         7 => decode_context_split_payload(payload, width, height, predictor_id),
         8 => decode_context_rans_payload(payload, width, height, predictor_id),
+        9 => decode_context_range_payload(payload, width, height, predictor_id),
         _ => bail!("unsupported entropy backend id: {backend_id}"),
     }
 }
@@ -490,6 +493,113 @@ fn decode_context_rans_payload(
     Ok(out)
 }
 
+fn encode_context_range_payload(
+    residuals: &[u8],
+    width: u16,
+    height: u16,
+    predictor_id: u8,
+) -> Result<Vec<u8>> {
+    let prefix_len = residual_prefix_len(width, height, predictor_id)?;
+    let prefix_bytes = &residuals[..prefix_len];
+    let body = &residuals[prefix_len..];
+    if !body.len().is_multiple_of(4) {
+        bail!("context-range residual body length must be divisible by 4");
+    }
+
+    let prefix_payload = zstd::stream::encode_all(Cursor::new(prefix_bytes), 9)?;
+    let folded = fold_residuals(body);
+    let streams = split_folded_context_streams(&folded, usize::from(width))?;
+    let context_payloads = streams
+        .iter()
+        .map(|stream| encode_sparse_range_folded_bytes(stream))
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut out = Vec::with_capacity(
+        CONTEXT_RANS_HEADER_LEN
+            + prefix_payload.len()
+            + context_payloads.iter().map(Vec::len).sum::<usize>(),
+    );
+    out.extend_from_slice(&(prefix_payload.len() as u32).to_le_bytes());
+    for payload in &context_payloads {
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    }
+    for stream in &streams {
+        out.extend_from_slice(&(stream.len() as u32).to_le_bytes());
+    }
+    out.extend_from_slice(&prefix_payload);
+    for payload in &context_payloads {
+        out.extend_from_slice(payload);
+    }
+    Ok(out)
+}
+
+fn decode_context_range_payload(
+    payload: &[u8],
+    width: u16,
+    height: u16,
+    predictor_id: u8,
+) -> Result<Vec<u8>> {
+    let expected_len = expected_residual_len(width, height, predictor_id)?;
+    if payload.len() < CONTEXT_RANS_HEADER_LEN {
+        bail!("context-range payload too short");
+    }
+    let header = read_context_rans_u32s(payload)?;
+    let lengths = &header[..CONTEXT_STREAM_COUNT + 1];
+    let counts = &header[CONTEXT_STREAM_COUNT + 1..];
+    let mut cursor = CONTEXT_RANS_HEADER_LEN;
+    let mut segments = Vec::with_capacity(CONTEXT_STREAM_COUNT + 1);
+    for &len_u32 in lengths {
+        let len = usize::try_from(len_u32).context("context-range segment length exceeds usize")?;
+        let end = cursor
+            .checked_add(len)
+            .context("context-range payload length overflow")?;
+        if end > payload.len() {
+            bail!("context-range payload truncated");
+        }
+        segments.push(&payload[cursor..end]);
+        cursor = end;
+    }
+    if cursor != payload.len() {
+        bail!("context-range payload has trailing bytes");
+    }
+
+    let prefix_len = residual_prefix_len(width, height, predictor_id)?;
+    let prefix_bytes = zstd::stream::decode_all(Cursor::new(segments[0]))?;
+    if prefix_bytes.len() != prefix_len {
+        bail!(
+            "context-range prefix length mismatch: expected {}, got {}",
+            prefix_len,
+            prefix_bytes.len()
+        );
+    }
+    let body_len = expected_len - prefix_len;
+    if body_len % 4 != 0 {
+        bail!("context-range expected body length must be divisible by 4");
+    }
+
+    let mut streams = std::array::from_fn::<_, CONTEXT_STREAM_COUNT, _>(|_| Vec::new());
+    for context in 0..CONTEXT_STREAM_COUNT {
+        streams[context] = decode_sparse_range_folded_bytes(
+            segments[context + 1],
+            usize::try_from(counts[context])
+                .context("context-range stream symbol count exceeds usize")?,
+        )?;
+    }
+    let folded_body = merge_folded_context_streams(&streams, body_len, usize::from(width))?;
+    let unfolded_body = unfold_residuals(&folded_body);
+
+    let mut out = prefix_bytes;
+    out.extend_from_slice(&unfolded_body);
+    if out.len() != expected_len {
+        bail!(
+            "context-range decode length mismatch: expected {}, got {}",
+            expected_len,
+            out.len()
+        );
+    }
+    Ok(out)
+}
+
 fn encode_rans_folded_payload(residuals: &[u8]) -> Result<Vec<u8>> {
     let folded = fold_residuals(residuals);
     encode_dense_rans_folded_bytes(&folded)
@@ -676,6 +786,122 @@ fn decode_sparse_rans_folded_bytes(payload: &[u8], expected_len: usize) -> Resul
         .map(|symbol| symbol.map(|value| value as u8))
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|err| anyhow::anyhow!("sparse rANS decode failed: {err}"))
+}
+
+fn encode_sparse_range_folded_bytes(folded: &[u8]) -> Result<Vec<u8>> {
+    if folded.is_empty() {
+        return Ok(Vec::new());
+    }
+    let freqs = normalized_rans_freqs(folded);
+    let model = rans_model_from_freqs(&freqs)?;
+    let mut coder = DefaultRangeEncoder::new();
+    let symbols = folded.iter().copied().map(usize::from);
+    coder
+        .encode_iid_symbols(symbols, &model)
+        .map_err(|err| anyhow::anyhow!("context range encode failed: {err}"))?;
+    let compressed = coder
+        .into_compressed()
+        .map_err(|_| anyhow::anyhow!("context range finalize failed"))?;
+
+    let nonzero = freqs
+        .iter()
+        .enumerate()
+        .filter_map(|(symbol, &freq)| (freq > 0).then_some((symbol as u8, freq)))
+        .collect::<Vec<_>>();
+    let nonzero_len = u16::try_from(nonzero.len()).context("sparse range symbol count overflow")?;
+
+    let mut out = Vec::with_capacity(
+        SPARSE_RANS_COUNT_LEN
+            + nonzero.len() * SPARSE_RANS_ENTRY_LEN
+            + RANS_WORD_COUNT_LEN
+            + compressed.len() * 4,
+    );
+    out.extend_from_slice(&nonzero_len.to_le_bytes());
+    for (symbol, freq) in nonzero {
+        out.push(symbol);
+        out.extend_from_slice(&freq.to_le_bytes());
+    }
+    out.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+    for word in compressed {
+        out.extend_from_slice(&word.to_le_bytes());
+    }
+    Ok(out)
+}
+
+fn decode_sparse_range_folded_bytes(payload: &[u8], expected_len: usize) -> Result<Vec<u8>> {
+    if expected_len == 0 {
+        if !payload.is_empty() {
+            bail!("empty context-range stream should not have payload");
+        }
+        return Ok(Vec::new());
+    }
+    if payload.len() < SPARSE_RANS_COUNT_LEN + RANS_WORD_COUNT_LEN {
+        bail!("sparse range payload too short");
+    }
+    let symbol_count = u16::from_le_bytes(
+        payload[..SPARSE_RANS_COUNT_LEN]
+            .try_into()
+            .expect("fixed 2-byte sparse range count"),
+    ) as usize;
+    let table_len = symbol_count
+        .checked_mul(SPARSE_RANS_ENTRY_LEN)
+        .context("sparse range table length overflow")?;
+    let words_offset = SPARSE_RANS_COUNT_LEN
+        .checked_add(table_len)
+        .context("sparse range words offset overflow")?;
+    if payload.len() < words_offset + RANS_WORD_COUNT_LEN {
+        bail!("sparse range payload truncated before word count");
+    }
+
+    let mut freqs = [0_u16; 256];
+    let mut cursor = SPARSE_RANS_COUNT_LEN;
+    for _ in 0..symbol_count {
+        let symbol = payload[cursor];
+        let freq = u16::from_le_bytes(
+            payload[cursor + 1..cursor + 3]
+                .try_into()
+                .expect("fixed 2-byte sparse range freq"),
+        );
+        freqs[symbol as usize] = freq;
+        cursor += SPARSE_RANS_ENTRY_LEN;
+    }
+    let total = freqs.iter().map(|&freq| u32::from(freq)).sum::<u32>();
+    if total != RANS_TOTAL {
+        bail!("invalid sparse range frequency total: expected {RANS_TOTAL}, got {total}");
+    }
+    let model = rans_model_from_freqs(&freqs)?;
+    let word_count = u32::from_le_bytes(
+        payload[words_offset..words_offset + RANS_WORD_COUNT_LEN]
+            .try_into()
+            .expect("fixed 4-byte sparse range word count"),
+    ) as usize;
+    let words_bytes = &payload[words_offset + RANS_WORD_COUNT_LEN..];
+    let expected_bytes = word_count
+        .checked_mul(4)
+        .context("sparse range compressed word length overflow")?;
+    if words_bytes.len() != expected_bytes {
+        bail!(
+            "sparse range payload word data length mismatch: expected {}, got {}",
+            expected_bytes,
+            words_bytes.len()
+        );
+    }
+    let mut compressed = Vec::with_capacity(word_count);
+    for idx in 0..word_count {
+        let start = idx * 4;
+        compressed.push(u32::from_le_bytes(
+            words_bytes[start..start + 4]
+                .try_into()
+                .expect("fixed 4-byte sparse range word"),
+        ));
+    }
+    let mut coder = DefaultRangeDecoder::from_compressed(compressed)
+        .map_err(|_| anyhow::anyhow!("sparse range decode init failed"))?;
+    coder
+        .decode_iid_symbols(expected_len, &model)
+        .map(|symbol| symbol.map(|value| value as u8))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|err| anyhow::anyhow!("sparse range decode failed: {err}"))
 }
 
 fn normalized_rans_freqs(bytes: &[u8]) -> [u16; 256] {

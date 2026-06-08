@@ -93,6 +93,7 @@ pub fn decode_special_transform(
 
 const QOI_OP_RGB: u8 = 0xFE;
 const QOI_OP_RGBA: u8 = 0xFF;
+const QOI_MAX_SEED_COLORS: usize = 8;
 const QOI_MASK_2: u8 = 0xC0;
 const QOI_OP_INDEX: u8 = 0x00;
 const QOI_OP_DIFF: u8 = 0x40;
@@ -107,10 +108,18 @@ fn encode_qoi_cache_transform(rgba: &[u8], width: u16, height: u16) -> Result<Ve
         bail!("QOI cache transform input length mismatch");
     }
 
+    let seed_colors = qoi_seed_colors(rgba);
     let mut index = [[0_u8; 4]; 64];
+    for &color in &seed_colors {
+        index[qoi_hash(color)] = color;
+    }
     let mut prev = [0_u8, 0_u8, 0_u8, 255_u8];
     let mut run = 0_u8;
-    let mut out = Vec::with_capacity(rgba.len());
+    let mut out = Vec::with_capacity(1 + seed_colors.len() * 4 + rgba.len());
+    out.push(seed_colors.len() as u8);
+    for &color in &seed_colors {
+        out.extend_from_slice(&color);
+    }
 
     for px in rgba.chunks_exact(4) {
         let current = [px[0], px[1], px[2], px[3]];
@@ -176,10 +185,34 @@ fn decode_qoi_cache_transform(payload: &[u8], width: u16, height: u16) -> Result
     let pixel_count = usize::from(width)
         .checked_mul(usize::from(height))
         .ok_or_else(|| anyhow::anyhow!("QOI cache pixel count overflow"))?;
+    if payload.is_empty() {
+        bail!("QOI cache payload truncated before seed header");
+    }
+    let seed_len = usize::from(payload[0]);
+    if seed_len > QOI_MAX_SEED_COLORS {
+        bail!("QOI cache seed palette too large");
+    }
+    let seed_bytes = seed_len
+        .checked_mul(4)
+        .ok_or_else(|| anyhow::anyhow!("QOI cache seed size overflow"))?;
+    if payload.len() < 1 + seed_bytes {
+        bail!("QOI cache payload truncated in seed palette");
+    }
+
     let mut index = [[0_u8; 4]; 64];
+    let mut cursor = 1_usize;
+    for _ in 0..seed_len {
+        let color = [
+            payload[cursor],
+            payload[cursor + 1],
+            payload[cursor + 2],
+            payload[cursor + 3],
+        ];
+        index[qoi_hash(color)] = color;
+        cursor += 4;
+    }
     let mut prev = [0_u8, 0_u8, 0_u8, 255_u8];
     let mut out = Vec::with_capacity(pixel_count * 4);
-    let mut cursor = 0_usize;
     let mut emitted = 0_usize;
 
     while emitted < pixel_count {
@@ -282,6 +315,24 @@ fn qoi_hash(px: [u8; 4]) -> usize {
         + usize::from(px[2]) * 7
         + usize::from(px[3]) * 11)
         % 64
+}
+
+fn qoi_seed_colors(rgba: &[u8]) -> Vec<[u8; 4]> {
+    let mut counts: Vec<([u8; 4], usize)> = Vec::new();
+    for px in rgba.chunks_exact(4) {
+        let color = [px[0], px[1], px[2], px[3]];
+        if let Some((_, count)) = counts.iter_mut().find(|(entry, _)| *entry == color) {
+            *count += 1;
+        } else {
+            counts.push((color, 1));
+        }
+    }
+    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    counts
+        .into_iter()
+        .take(QOI_MAX_SEED_COLORS)
+        .map(|(color, _)| color)
+        .collect()
 }
 
 fn subtract_green(rgba: &[u8]) -> Vec<u8> {

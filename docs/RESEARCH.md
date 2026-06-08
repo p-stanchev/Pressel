@@ -97,7 +97,7 @@ This workflow is intentionally strict. Pressel does not accept visually-lossless
 
 ## Current Scope
 
-The current `v0.7.0` research prototype focuses on:
+The current `v0.7.1` research prototype focuses on:
 
 - `.prsl` v1 container design
 - strict RGBA verification
@@ -105,11 +105,13 @@ The current `v0.7.0` research prototype focuses on:
 - expanded reversible transform search
 - adaptive whole-image tile-size search
 - structured exact plane modeling for low-cardinality and patterned channels
-- QOI-style exact pixel-cache transform experiments
+- seeded QOI-style exact pixel-cache transform experiments
 - adaptive per-block predictor selection
 - decoder-deterministic edge-guided prediction
+- weighted gradient prediction
 - photo-guided RGB prediction with per-tile coupling parameters
-- raw, Zstd, folded-residual, channel-separated, static rANS, context-split, and context-adaptive folded rANS exact payload search
+- lightweight per-tile classification heuristics for search steering
+- raw, Zstd, folded-residual, channel-separated, static rANS, context-split, context-adaptive folded rANS, and context-adaptive folded arithmetic/range exact payload search
 - optional PNG metadata/chunk/source-file preservation tags
 - optional multi-core tile encoding for long-running experiments
 - benchmark generation through `bench.csv`

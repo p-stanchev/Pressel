@@ -73,11 +73,11 @@ Transform `6` splits the tile into separate `R`, `G`, `B`, and `A` planes and le
 
 This transform is aimed at low-cardinality, patterned, or nearly affine channels that do not compress well when forced through one bytewise tile model.
 
-### QOI-Style Pixel-Cache Transform
+### Seeded QOI-Style Pixel-Cache Transform
 
-Transform `7` is a variable-length exact tile transform built around a 64-entry RGBA cache hash, short runs, small RGB deltas, luma-like deltas, and raw RGB/RGBA escape opcodes.
+Transform `7` is a variable-length exact tile transform built around a small seed palette of common tile colors, a 64-entry RGBA cache hash, short runs, small RGB deltas, luma-like deltas, and raw RGB/RGBA escape opcodes.
 
-It is not QOI-compatible at the file level. Instead, it gives Pressel a cache-oriented exact tile representation that can compete with the other reversible tile strategies during search.
+It is not QOI-compatible at the file level. Instead, it gives Pressel a cache-oriented exact tile representation that can compete with the other reversible tile strategies during search, while the seed palette makes the cache friendlier on repeated local colors.
 
 ## Predictors
 
@@ -92,6 +92,7 @@ Pressel v1 currently tries these predictors for every tile:
 - Adaptive 8x8 block predictor map
 - Edge-guided deterministic predictor
 - Photo-guided RGB predictor
+- Weighted gradient predictor
 
 Predictors are applied per byte channel within the transformed tile. The residual is stored as:
 
@@ -107,6 +108,8 @@ The edge-guided predictor chooses between left-, top-, and clamped-gradient-styl
 
 The photo-guided predictor stores a compact per-tile prefix that selects green/chroma base predictors and fixed-point green-coupling coefficients for red and blue. It reconstructs green first and then predicts red and blue from the reconstructed green value, which is aimed at photo-like RGB edge correlation.
 
+The weighted gradient predictor blends left/top support with a clamped gradient estimate using only already-decoded neighbors. It is intended as a stronger general natural-image predictor than a plain average while remaining deterministic and exactly reversible.
+
 ## Entropy Backends
 
 Implemented backends:
@@ -120,14 +123,17 @@ Implemented backends:
 - Static rANS over folded residual streams
 - Zstd over context-adaptive folded residual streams
 - Context-adaptive folded rANS residual streams
+- Context-adaptive folded arithmetic/range residual streams
 
-For bytewise transformed residual streams, every tile tries all implemented entropy backends. The folded residual variants are exact reversible remaps of modulo-256 residual bytes that cluster small signed errors closer together before optional compression. The channel-separated variants preserve any adaptive predictor-map prefix, split the remaining residuals into exact per-channel streams, optionally fold those channel streams, and then compress them independently. The static rANS backend uses a stored normalized frequency table over folded residual symbols, which is a first step toward a more custom entropy path than generic Zstd. The context-adaptive folded backends preserve prefix bytes, fold the residual body, bin symbols by deterministic channel-and-activity contexts, and then either compress those context streams independently with Zstd or encode them through sparse-table rANS payloads. For the structured exact plane transform and QOI-style pixel-cache transform, the encoder stores exact transform payloads through the raw-vs-Zstd choice only, because residual-specific backends are defined for predictor residual streams rather than arbitrary transform payload bytes.
+For bytewise transformed residual streams, every tile tries all implemented entropy backends. The folded residual variants are exact reversible remaps of modulo-256 residual bytes that cluster small signed errors closer together before optional compression. The channel-separated variants preserve any adaptive predictor-map prefix, split the remaining residuals into exact per-channel streams, optionally fold those channel streams, and then compress them independently. The static rANS backend uses a stored normalized frequency table over folded residual symbols, which is a first step toward a more custom entropy path than generic Zstd. The context-adaptive folded backends preserve prefix bytes, fold the residual body, bin symbols by deterministic channel-and-activity contexts, and then either compress those context streams independently with Zstd or encode them through sparse-table rANS or range-coded payloads. For the structured exact plane transform and seeded QOI-style pixel-cache transform, the encoder stores exact transform payloads through the raw-vs-Zstd choice only, because residual-specific backends are defined for predictor residual streams rather than arbitrary transform payload bytes.
 
 ## Tile Strategy Search
 
 For each tile, Pressel enumerates every compatible transform, predictor, and entropy backend combination.
 
 Some transforms and backends are only valid for specific payload types, so invalid combinations are skipped rather than forced through the search.
+
+The current encoder also applies lightweight per-tile classification heuristics before the full exact search. Opaque, flat, low-cardinality, cache-friendly, and photo-like tile signals are used to trim obviously poor transform and predictor combinations without changing the format or weakening exactness.
 
 The smallest exact tile payload is selected and written into the `.prsl` container with its strategy identifiers.
 
@@ -152,6 +158,6 @@ When exporting PNG from `.prsl`, Pressel regenerates critical PNG structure from
 
 Planned research directions include:
 
-- deeper arithmetic-coded context modeling beyond the current context-adaptive folded rANS backend
-- stronger cache-aware or hybrid pixel-cache transforms beyond the current QOI-style tile mode
-- JPEG XL-style weighted predictor
+- deeper learned or multi-feature arithmetic-coded context modeling beyond the current folded context-range backend
+- stronger hybrid palette/cache transforms beyond the current seeded QOI-style tile mode
+- richer semantic per-tile image classification and recursive split heuristics

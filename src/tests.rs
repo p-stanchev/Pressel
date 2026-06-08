@@ -216,6 +216,14 @@ fn context_rans_folded_entropy_roundtrip() {
 }
 
 #[test]
+fn context_range_folded_entropy_roundtrip() {
+    let bytes = gradient(17, 9);
+    let encoded = encode_residual_payload(9, &bytes, 17, 9, 0).unwrap();
+    let decoded = decode_residual_payload(9, &encoded, 17, 9, 0).unwrap();
+    assert_eq!(decoded, bytes);
+}
+
+#[test]
 fn channel_split_entropy_roundtrip() {
     let bytes = gradient(17, 9);
     let encoded = encode_residual_payload(4, &bytes, 17, 9, 0).unwrap();

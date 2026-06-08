@@ -1,12 +1,18 @@
 use anyhow::{Result, bail};
 
-pub const PREDICTOR_COUNT: u8 = 9;
+pub const PREDICTOR_COUNT: u8 = 10;
 pub const ADAPTIVE_PREDICTOR_ID: u8 = 6;
 pub const EDGE_GUIDED_PREDICTOR_ID: u8 = 7;
 pub const PHOTO_GUIDED_PREDICTOR_ID: u8 = 8;
+pub const WEIGHTED_GRADIENT_PREDICTOR_ID: u8 = 9;
 pub const ADAPTIVE_BLOCK_SIZE: usize = 8;
 const PHOTO_GUIDED_PREFIX_LEN: usize = 4;
-const PHOTO_GUIDED_GREEN_PREDICTORS: [u8; 3] = [4, 5, EDGE_GUIDED_PREDICTOR_ID];
+const PHOTO_GUIDED_GREEN_PREDICTORS: [u8; 4] = [
+    4,
+    5,
+    EDGE_GUIDED_PREDICTOR_ID,
+    WEIGHTED_GRADIENT_PREDICTOR_ID,
+];
 const PHOTO_GUIDED_CHROMA_PREDICTORS: [u8; 2] = [1, 5];
 const PHOTO_GUIDED_K_NUMS: [i16; 7] = [0, 1, 2, 3, 4, 5, 6];
 const PHOTO_GUIDED_K_DEN_SHIFT: u8 = 2;
@@ -92,6 +98,11 @@ pub fn predict_value(
     } else {
         0
     };
+    let top_right = if y > 0 && x + 1 < width {
+        bytes[(((y - 1) * width + (x + 1)) * 4) + channel]
+    } else {
+        top
+    };
 
     let pred = match predictor_id {
         0 => 0,
@@ -103,6 +114,7 @@ pub fn predict_value(
         6 => bail!("adaptive predictor id must be handled through block map"),
         7 => edge_guided(left, top, top_left),
         8 => bail!("photo-guided predictor id must be handled through tile prefix"),
+        9 => weighted_gradient(left, top, top_left, top_right),
         _ => bail!("unsupported predictor id: {predictor_id}"),
     };
     Ok(pred)
@@ -521,6 +533,26 @@ fn edge_guided(left: u8, top: u8, top_left: u8) -> u8 {
         let gradient = i16::from(left) + i16::from(top) - i16::from(top_left);
         gradient.clamp(0, 255) as u8
     }
+}
+
+fn weighted_gradient(left: u8, top: u8, top_left: u8, top_right: u8) -> u8 {
+    let gradient = (i16::from(left) + i16::from(top) - i16::from(top_left)).clamp(0, 255) as u8;
+    let left_support = 1
+        + (i16::from(top) - i16::from(top_left)).unsigned_abs()
+        + (i16::from(top_right) - i16::from(top)).unsigned_abs();
+    let top_support = 1
+        + (i16::from(left) - i16::from(top_left)).unsigned_abs()
+        + (i16::from(left) - i16::from(top)).unsigned_abs();
+
+    let left_weight = u32::from(257_u16.saturating_sub(left_support.min(256)));
+    let top_weight = u32::from(257_u16.saturating_sub(top_support.min(256)));
+    let denom = left_weight + top_weight;
+    let blended = if denom == 0 {
+        ((u16::from(left) + u16::from(top)) / 2) as u8
+    } else {
+        ((u32::from(left) * left_weight + u32::from(top) * top_weight + denom / 2) / denom) as u8
+    };
+    ((u16::from(blended) + u16::from(gradient)) / 2) as u8
 }
 
 fn paeth(a: u8, b: u8, c: u8) -> u8 {

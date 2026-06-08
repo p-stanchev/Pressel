@@ -8,12 +8,13 @@ use crate::png_chunks::{
     TAG_PNG_METADATA_CHUNKS, collect_png_preservation, encode_chunk_records, is_png_file,
 };
 use crate::predict::{
-    PHOTO_GUIDED_PREDICTOR_ID, PREDICTOR_COUNT, encode_residuals, residual_prefix_len,
+    ADAPTIVE_PREDICTOR_ID, EDGE_GUIDED_PREDICTOR_ID, PHOTO_GUIDED_PREDICTOR_ID, PREDICTOR_COUNT,
+    WEIGHTED_GRADIENT_PREDICTOR_ID, encode_residuals, residual_prefix_len,
 };
 use crate::tiles::{TileBounds, extract_tile_rgba, split_into_tiles};
 use crate::transform::{
-    TRANSFORM_COUNT, apply_transform, encode_special_transform, is_special_transform,
-    transform_ids_for_tile,
+    QOI_CACHE_TRANSFORM_ID, STRUCTURED_PLANE_TRANSFORM_ID, TRANSFORM_COUNT, apply_transform,
+    encode_special_transform, is_special_transform, transform_ids_for_tile,
 };
 use anyhow::{Context, Result, bail};
 use image::ImageReader;
@@ -29,6 +30,7 @@ const CHANNEL_SPLIT_OVERHEAD_ESTIMATE: f64 = 80.0;
 const RANS_OVERHEAD_ESTIMATE: f64 = (256 * 2 + 4) as f64;
 const CONTEXT_SPLIT_OVERHEAD_ESTIMATE: f64 = 476.0;
 const CONTEXT_RANS_BASE_OVERHEAD_ESTIMATE: f64 = 132.0;
+const CONTEXT_RANGE_BASE_OVERHEAD_ESTIMATE: f64 = 132.0;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EncodeStats {
@@ -236,10 +238,11 @@ fn candidate_tile_sizes(width: u32, height: u32) -> Vec<u16> {
 fn encode_tile(tile: TileBounds, tile_rgba: &[u8]) -> Result<EncodedTile> {
     let mut best: Option<EncodedTile> = None;
     let mut best_total_len = usize::MAX;
-    let allow_photo_guided = photo_guided_applicable(tile, tile_rgba);
+    let profile = analyze_tile_profile(tile, tile_rgba)?;
+    let allow_photo_guided = profile.photo_like && photo_guided_applicable(tile, tile_rgba);
     let mut residual_candidates = Vec::new();
 
-    for transform_id in transform_ids_for_tile(tile_rgba) {
+    for transform_id in candidate_transform_ids(tile_rgba, &profile) {
         if is_special_transform(transform_id) {
             let raw_payload =
                 encode_special_transform(transform_id, tile_rgba, tile.width, tile.height)?;
@@ -267,7 +270,7 @@ fn encode_tile(tile: TileBounds, tile_rgba: &[u8]) -> Result<EncodedTile> {
             continue;
         }
         let transformed = apply_transform(transform_id, tile_rgba)?;
-        for predictor_id in 0..PREDICTOR_COUNT {
+        for predictor_id in candidate_predictor_ids(&profile) {
             if predictor_id == PHOTO_GUIDED_PREDICTOR_ID
                 && (!allow_photo_guided || !photo_guided_transform_applicable(transform_id))
             {
@@ -494,6 +497,13 @@ fn estimate_entropy_payload_lengths(
                 + CONTEXT_RANS_BASE_OVERHEAD_ESTIMATE
                 + context_rans_overhead,
         ),
+        (
+            9,
+            prefix_len as f64
+                + (context_bits / 8.0)
+                + CONTEXT_RANGE_BASE_OVERHEAD_ESTIMATE
+                + context_rans_overhead,
+        ),
     ])
 }
 
@@ -556,4 +566,135 @@ fn photo_guided_applicable(tile: TileBounds, tile_rgba: &[u8]) -> bool {
 
 fn photo_guided_transform_applicable(transform_id: u8) -> bool {
     matches!(transform_id, 0 | 1 | 2 | 4)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TileProfile {
+    opaque: bool,
+    flat: bool,
+    low_cardinality: bool,
+    cache_friendly: bool,
+    photo_like: bool,
+}
+
+fn analyze_tile_profile(tile: TileBounds, tile_rgba: &[u8]) -> Result<TileProfile> {
+    let pixel_count = tile.pixel_count()?;
+    if tile_rgba.len() != pixel_count * 4 {
+        bail!("tile profile input length mismatch");
+    }
+
+    let width = usize::from(tile.width);
+    let height = usize::from(tile.height);
+    let mut opaque = true;
+    let mut unique: Vec<[u8; 4]> = Vec::new();
+    let mut repeat_neighbors = 0_usize;
+    let mut neighbor_pairs = 0_usize;
+    let mut delta_sum = 0_u64;
+    let mut delta_count = 0_u64;
+
+    for y in 0..height {
+        for x in 0..width {
+            let idx = (y * width + x) * 4;
+            let px = [
+                tile_rgba[idx],
+                tile_rgba[idx + 1],
+                tile_rgba[idx + 2],
+                tile_rgba[idx + 3],
+            ];
+            if px[3] != 255 {
+                opaque = false;
+            }
+            if unique.len() <= 64 && !unique.contains(&px) {
+                unique.push(px);
+            }
+
+            if x > 0 {
+                neighbor_pairs += 1;
+                let left_idx = idx - 4;
+                let left = &tile_rgba[left_idx..left_idx + 4];
+                if left == &tile_rgba[idx..idx + 4] {
+                    repeat_neighbors += 1;
+                }
+                delta_sum += u64::from(tile_rgba[idx].abs_diff(left[0]))
+                    + u64::from(tile_rgba[idx + 1].abs_diff(left[1]))
+                    + u64::from(tile_rgba[idx + 2].abs_diff(left[2]));
+                delta_count += 3;
+            }
+            if y > 0 {
+                neighbor_pairs += 1;
+                let top_idx = ((y - 1) * width + x) * 4;
+                let top = &tile_rgba[top_idx..top_idx + 4];
+                if top == &tile_rgba[idx..idx + 4] {
+                    repeat_neighbors += 1;
+                }
+                delta_sum += u64::from(tile_rgba[idx].abs_diff(top[0]))
+                    + u64::from(tile_rgba[idx + 1].abs_diff(top[1]))
+                    + u64::from(tile_rgba[idx + 2].abs_diff(top[2]));
+                delta_count += 3;
+            }
+        }
+    }
+
+    let unique_count = unique.len();
+    let repeat_ratio = if neighbor_pairs == 0 {
+        0.0
+    } else {
+        repeat_neighbors as f64 / neighbor_pairs as f64
+    };
+    let avg_delta = if delta_count == 0 {
+        0.0
+    } else {
+        delta_sum as f64 / delta_count as f64
+    };
+
+    Ok(TileProfile {
+        opaque,
+        flat: unique_count <= 4 || avg_delta <= 3.0,
+        low_cardinality: unique_count <= 32,
+        cache_friendly: unique_count <= 64 || repeat_ratio >= 0.12,
+        photo_like: opaque && unique_count > 32 && (6.0..=96.0).contains(&avg_delta),
+    })
+}
+
+fn candidate_transform_ids(tile_rgba: &[u8], profile: &TileProfile) -> Vec<u8> {
+    let mut ids = transform_ids_for_tile(tile_rgba)
+        .into_iter()
+        .filter(|&transform_id| {
+            if transform_id == QOI_CACHE_TRANSFORM_ID {
+                return profile.cache_friendly;
+            }
+            if transform_id == 3 {
+                return !profile.opaque || profile.flat;
+            }
+            if transform_id == STRUCTURED_PLANE_TRANSFORM_ID {
+                return profile.low_cardinality || profile.flat || !profile.photo_like;
+            }
+            true
+        })
+        .collect::<Vec<_>>();
+    if ids.is_empty() {
+        ids.push(0);
+    }
+    ids
+}
+
+fn candidate_predictor_ids(profile: &TileProfile) -> Vec<u8> {
+    let mut ids = vec![
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        EDGE_GUIDED_PREDICTOR_ID,
+        WEIGHTED_GRADIENT_PREDICTOR_ID,
+    ];
+    if profile.photo_like || !profile.flat {
+        ids.push(ADAPTIVE_PREDICTOR_ID);
+    }
+    if profile.photo_like {
+        ids.push(PHOTO_GUIDED_PREDICTOR_ID);
+    }
+    ids.retain(|&id| id < PREDICTOR_COUNT);
+    ids
 }
