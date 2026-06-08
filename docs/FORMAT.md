@@ -27,6 +27,8 @@ The v1 header stores:
 
 The current implementation uses `channels = 4` for RGBA8.
 
+All integer fields in `.prsl` v1 are encoded little-endian unless explicitly stated otherwise.
+
 After the required tile data, v1 may optionally store tagged trailing sections:
 
 - `0x0001`: preserved PNG metadata chunk records
@@ -40,6 +42,8 @@ Each section is encoded as:
 - `tag_payload: [u8; tag_len]`
 
 These sections are optional. Default Pressel files omit them.
+
+After all tile records, the decoder reads optional tagged sections until EOF. Unknown tag types must be skipped using `tag_len`. Duplicate known tags are currently invalid unless a future version explicitly permits them.
 
 ## Tile Layout
 
@@ -172,10 +176,16 @@ Implemented in v1:
 - `3`: Zstd-compressed folded residual stream
 - `4`: Zstd-compressed channel-separated residual stream
 - `5`: Zstd-compressed folded channel-separated residual stream
+- `6`: Static rANS-compressed folded residual stream
+- `7`: Zstd-compressed context-adaptive folded residual stream
 
 Backends `2` and `3` are only valid for predictor residual streams. They apply an exact reversible residual folding map that brings small signed prediction errors closer together in byte space before optional compression. This is intended to help natural-image residual distributions remain more compressible without changing any decoded pixel values.
 
 Backends `4` and `5` are also valid only for predictor residual streams. They split residual bytes into exact per-channel streams and compress those streams separately after preserving any adaptive predictor-map bytes. Backend `5` also applies the reversible residual folding map to each channel stream before compression.
+
+Backend `6` is also valid only for predictor residual streams. It folds residual bytes exactly and then encodes them with a static order-0 rANS model reconstructed from the stored normalized frequency table.
+
+Backend `7` is also valid only for predictor residual streams. It preserves any residual prefix bytes, folds the remaining residual body exactly, assigns each folded residual byte to a deterministic context based on channel and local activity, and compresses those context streams independently. The decoder reconstructs the same contexts from already-decoded folded residual neighbors.
 
 ## Decoding Process
 

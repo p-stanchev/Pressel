@@ -48,9 +48,11 @@ When benchmarking preservation-aware `.prsl` files, it helps to separate:
 
 Those preservation modes should be reported explicitly rather than mixed into the main generation-to-generation compression table, because they measure completeness tradeoffs rather than pure image-signal compression.
 
-## Future Cross-Codec Comparisons
+## Cross-Codec Comparison Methodology
 
-Future benchmark studies may compare Pressel against:
+Current example cross-codec results are listed in the main README. This file defines the methodology and required reporting fields for those comparisons.
+
+Useful comparison targets include:
 
 - PNG
 - ZopfliPNG

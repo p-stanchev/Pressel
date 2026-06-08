@@ -7,3 +7,6 @@ bench.csv
 # Generated demo and codec artifacts
 *.png
 *.prsl
+*.webp
+*.jpg
+*.jxl

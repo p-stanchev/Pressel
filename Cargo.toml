@@ -1,6 +1,6 @@
 [package]
 name = "pressel"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 authors = ["Petar Stanchev"]
 license = "MIT"
@@ -12,6 +12,7 @@ categories = ["multimedia::images", "compression", "command-line-utilities"]
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+constriction = "0.4"
 crc32fast = "1"
 csv = "1"
 image = "0.25"

@@ -111,16 +111,16 @@ Implemented backends:
 - Zstd over folded residual stream
 - Zstd over channel-separated residual streams
 - Zstd over folded, channel-separated residual streams
+- Static rANS over folded residual streams
+- Zstd over context-adaptive folded residual streams
 
-For bytewise transformed residual streams, every tile tries all implemented entropy backends. The folded residual variants are exact reversible remaps of modulo-256 residual bytes that cluster small signed errors closer together before optional compression. The channel-separated variants preserve any adaptive predictor-map prefix, split the remaining residuals into exact per-channel streams, optionally fold those channel streams, and then compress them independently. For the structured exact plane transform, the encoder stores its exact transform payload through the raw-vs-Zstd choice only, because residual-specific backends are defined for predictor residual streams rather than arbitrary transform payload bytes.
+For bytewise transformed residual streams, every tile tries all implemented entropy backends. The folded residual variants are exact reversible remaps of modulo-256 residual bytes that cluster small signed errors closer together before optional compression. The channel-separated variants preserve any adaptive predictor-map prefix, split the remaining residuals into exact per-channel streams, optionally fold those channel streams, and then compress them independently. The static rANS backend uses a stored normalized frequency table over folded residual symbols, which is a first step toward a more custom entropy path than generic Zstd. The context-adaptive folded backend preserves prefix bytes, folds the residual body, bins symbols by deterministic channel-and-activity contexts, and compresses those context streams independently. For the structured exact plane transform, the encoder stores its exact transform payload through the raw-vs-Zstd choice only, because residual-specific backends are defined for predictor residual streams rather than arbitrary transform payload bytes.
 
 ## Tile Strategy Search
 
-For each tile, Pressel enumerates:
+For each tile, Pressel enumerates every compatible transform, predictor, and entropy backend combination.
 
-- every implemented transform
-- every implemented predictor
-- every implemented entropy backend
+Some transforms and backends are only valid for specific payload types, so invalid combinations are skipped rather than forced through the search.
 
 The smallest exact tile payload is selected and written into the `.prsl` container with its strategy identifiers.
 
@@ -145,6 +145,6 @@ When exporting PNG from `.prsl`, Pressel regenerates critical PNG structure from
 
 Planned research directions include:
 
-- rANS entropy coding
+- deeper context-adaptive rANS / arithmetic entropy coding
 - QOI-style pixel cache
 - JPEG XL-style weighted predictor

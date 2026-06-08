@@ -26,6 +26,8 @@ const FINALIST_COUNT_PER_TILE: usize = 6;
 const MAX_BACKENDS_PER_CANDIDATE: usize = 3;
 const ZSTD_STREAM_OVERHEAD_ESTIMATE: f64 = 24.0;
 const CHANNEL_SPLIT_OVERHEAD_ESTIMATE: f64 = 80.0;
+const RANS_OVERHEAD_ESTIMATE: f64 = (256 * 2 + 4) as f64;
+const CONTEXT_SPLIT_OVERHEAD_ESTIMATE: f64 = 476.0;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EncodeStats {
@@ -403,6 +405,12 @@ fn estimate_entropy_payload_lengths(
     let mut folded_hist = [0_u32; 256];
     let mut channel_hist = [[0_u32; 256]; 4];
     let mut folded_channel_hist = [[0_u32; 256]; 4];
+    let mut folded_context_hist = [[0_u32; 256]; 16];
+    let width_usize = usize::from(width);
+    let pixel_count = usize::from(width)
+        .checked_mul(usize::from(height))
+        .context("entropy estimate pixel count overflow")?;
+    let mut folded_body = Vec::with_capacity(body.len());
 
     for chunk in body.chunks_exact(4) {
         for channel in 0..4 {
@@ -412,7 +420,13 @@ fn estimate_entropy_payload_lengths(
             let folded = fold_residual_for_score(value);
             folded_hist[folded as usize] += 1;
             folded_channel_hist[channel][folded as usize] += 1;
+            folded_body.push(folded);
         }
+    }
+
+    for idx in 0..folded_body.len() {
+        let context = folded_context_id_for_score(&folded_body, width_usize, pixel_count, idx);
+        folded_context_hist[context][folded_body[idx] as usize] += 1;
     }
 
     let total_symbols = body.len();
@@ -425,6 +439,13 @@ fn estimate_entropy_payload_lengths(
     let folded_channel_bits = folded_channel_hist
         .iter()
         .map(|channel| estimated_histogram_bits(channel, total_symbols / 4))
+        .sum::<f64>();
+    let context_bits = folded_context_hist
+        .iter()
+        .map(|context_hist| {
+            let context_total = context_hist.iter().map(|&count| count as usize).sum::<usize>();
+            estimated_histogram_bits(context_hist, context_total)
+        })
         .sum::<f64>();
 
     Ok(vec![
@@ -445,6 +466,14 @@ fn estimate_entropy_payload_lengths(
         (
             5,
             prefix_len as f64 + (folded_channel_bits / 8.0) + CHANNEL_SPLIT_OVERHEAD_ESTIMATE,
+        ),
+        (
+            6,
+            (folded_bits / 8.0) + RANS_OVERHEAD_ESTIMATE,
+        ),
+        (
+            7,
+            prefix_len as f64 + (context_bits / 8.0) + CONTEXT_SPLIT_OVERHEAD_ESTIMATE,
         ),
     ])
 }
@@ -470,6 +499,32 @@ fn fold_residual_for_score(residual: u8) -> u8 {
     } else {
         (255 - residual).wrapping_mul(2).wrapping_add(1)
     }
+}
+
+fn folded_context_id_for_score(
+    folded_body: &[u8],
+    width: usize,
+    pixel_count: usize,
+    idx: usize,
+) -> usize {
+    let channel = idx % 4;
+    let pixel_index = idx / 4;
+    let x = pixel_index % width;
+    let y = pixel_index / width;
+    let left = if x > 0 { folded_body[idx - 4] } else { 0 };
+    let top = if y > 0 && pixel_count > width {
+        folded_body[idx - (width * 4)]
+    } else {
+        0
+    };
+    let activity = left.max(top);
+    let bin = match activity {
+        0..=1 => 0,
+        2..=7 => 1,
+        8..=31 => 2,
+        _ => 3,
+    };
+    channel * 4 + bin
 }
 
 fn photo_guided_applicable(tile: TileBounds, tile_rgba: &[u8]) -> bool {
