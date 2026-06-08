@@ -706,7 +706,7 @@ fn normalized_rans_freqs(bytes: &[u8]) -> [u16; 256] {
     }
 
     if sum < RANS_TOTAL {
-        remainders.sort_by(|a, b| b.1.cmp(&a.1));
+        remainders.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         let mut idx = 0;
         while sum < RANS_TOTAL {
             let symbol = remainders[idx % remainders.len()].0;
@@ -715,7 +715,7 @@ fn normalized_rans_freqs(bytes: &[u8]) -> [u16; 256] {
             idx += 1;
         }
     } else if sum > RANS_TOTAL {
-        remainders.sort_by(|a, b| a.1.cmp(&b.1));
+        remainders.sort_by_key(|entry| entry.1);
         let mut idx = 0;
         while sum > RANS_TOTAL {
             let symbol = remainders[idx % remainders.len()].0;
